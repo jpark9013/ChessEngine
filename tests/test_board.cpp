@@ -8,10 +8,10 @@ using namespace chess;
 
 namespace {
 
-constexpr const char* kStartFen =
+constexpr const char *kStartFen =
     "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1";
 
-}  // namespace
+} // namespace
 
 TEST(Board, SquareAlgebraicRoundtrip) {
   for (int r = 0; r < 8; ++r) {
@@ -52,7 +52,8 @@ TEST(Board, StartPositionFen) {
 }
 
 TEST(Board, FenRoundtripAndBlackKnight) {
-  const char* fen = "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
+  const char *fen =
+      "r3k2r/p1ppqpb1/bn2pnp1/3PN3/1p2P3/2N2Q1p/PPPBBPPP/R3K2R w KQkq - 0 1";
   Board b = Board::from_fen(fen);
   EXPECT_EQ(b.fen(), fen);
   EXPECT_EQ(piece_to_fen(b.piece_at(Square::from_algebraic("b6"))), 'n');
@@ -67,7 +68,8 @@ TEST(Board, FenLoadsRankEightOnTop) {
 }
 
 TEST(Board, FenSideToMoveAndCastlingOrder) {
-  Board b = Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1");
+  Board b = Board::from_fen(
+      "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR b KQkq - 0 1");
   EXPECT_EQ(b.side_to_move(), Color::Black);
   EXPECT_NE(b.fen().find(" b KQkq "), std::string::npos);
 }
@@ -76,7 +78,7 @@ TEST(Board, MakeUnmakeRestoresFenAndHash) {
   Board b;
   const std::string fen = b.fen();
   const auto h = b.hash();
-  for (const Move& m : b.legal_moves()) {
+  for (const Move &m : b.legal_moves()) {
     b.make(m);
     b.unmake();
     EXPECT_EQ(b.fen(), fen);
@@ -92,7 +94,7 @@ TEST(Board, PawnAttacksPutKingInCheck) {
 
 TEST(Board, KingCannotStepOntoPawnAttack) {
   Board c = Board::from_fen("8/8/8/3p4/8/4K3/8/8 w - - 0 1");
-  for (const Move& m : c.legal_moves()) {
+  for (const Move &m : c.legal_moves()) {
     EXPECT_NE(m.to, Square::from_algebraic("e4"));
     EXPECT_NE(m.to, Square::from_algebraic("c4"));
   }
@@ -112,28 +114,30 @@ TEST(Board, CastlingRequiresEmptyBFile) {
   Board b = Board::from_fen("r3k3/8/8/8/8/8/8/R3K2R w KQq - 0 1");
   bool found_q = false;
   bool found_k = false;
-  for (const Move& m : b.legal_moves()) {
-    if (m.flag == MoveFlag::CastleKingside) found_k = true;
-    if (m.flag == MoveFlag::CastleQueenside) found_q = true;
+  for (const Move &m : b.legal_moves()) {
+    if (m.flag == MoveFlag::CastleKingside)
+      found_k = true;
+    if (m.flag == MoveFlag::CastleQueenside)
+      found_q = true;
   }
   EXPECT_TRUE(found_k);
   EXPECT_TRUE(found_q);
 
   Board blocked = Board::from_fen("r3k3/8/8/8/8/8/8/RN2K2R w KQq - 0 1");
-  for (const Move& m : blocked.legal_moves()) {
+  for (const Move &m : blocked.legal_moves()) {
     EXPECT_NE(m.flag, MoveFlag::CastleQueenside);
   }
 }
 
 TEST(Board, CannotCastleThroughOrOutOfCheck) {
   Board f1 = Board::from_fen("4k3/8/8/8/8/8/8/R3K2r w KQ - 0 1");
-  for (const Move& m : f1.legal_moves()) {
+  for (const Move &m : f1.legal_moves()) {
     EXPECT_NE(m.flag, MoveFlag::CastleKingside);
   }
 
   Board in_check = Board::from_fen("4k3/8/8/8/8/8/4r3/R3K2R w KQ - 0 1");
   EXPECT_TRUE(in_check.in_check());
-  for (const Move& m : in_check.legal_moves()) {
+  for (const Move &m : in_check.legal_moves()) {
     EXPECT_NE(m.flag, MoveFlag::CastleKingside);
     EXPECT_NE(m.flag, MoveFlag::CastleQueenside);
   }
@@ -172,8 +176,9 @@ TEST(Board, CastlingMakeUnmakeAndSan) {
 TEST(Board, EnPassantCapture) {
   Board b = Board::from_fen("4k3/8/8/3pP3/8/8/8/4K3 w - d6 0 1");
   bool found = false;
-  for (const Move& m : b.legal_moves()) {
-    if (m.flag != MoveFlag::EnPassant) continue;
+  for (const Move &m : b.legal_moves()) {
+    if (m.flag != MoveFlag::EnPassant)
+      continue;
     found = true;
     EXPECT_EQ(m.to, Square::from_algebraic("d6"));
     const std::string before = b.fen();
@@ -194,8 +199,9 @@ TEST(Board, EnPassantFromDoublePush) {
   b.make(b.parse_uci("d7d5"));
   EXPECT_EQ(b.ep_square(), Square::from_algebraic("d6"));
   bool found = false;
-  for (const Move& m : b.legal_moves()) {
-    if (m.flag == MoveFlag::EnPassant) found = true;
+  for (const Move &m : b.legal_moves()) {
+    if (m.flag == MoveFlag::EnPassant)
+      found = true;
   }
   EXPECT_TRUE(found);
 }
@@ -203,7 +209,7 @@ TEST(Board, EnPassantFromDoublePush) {
 TEST(Board, PromotionQuietAndCapture) {
   Board b = Board::from_fen("6k1/4P3/8/8/8/8/8/4K3 w - - 0 1");
   int promos = 0;
-  for (const Move& m : b.legal_moves()) {
+  for (const Move &m : b.legal_moves()) {
     if (m.flag == MoveFlag::Promotion) {
       ++promos;
       EXPECT_EQ(m.to, Square::from_algebraic("e8"));
@@ -213,8 +219,9 @@ TEST(Board, PromotionQuietAndCapture) {
 
   Board c = Board::from_fen("5nk1/4P3/8/8/8/8/8/4K3 w - - 0 1");
   int cap_promos = 0;
-  for (const Move& m : c.legal_moves()) {
-    if (m.flag == MoveFlag::Promotion && m.to == Square::from_algebraic("f8")) ++cap_promos;
+  for (const Move &m : c.legal_moves()) {
+    if (m.flag == MoveFlag::Promotion && m.to == Square::from_algebraic("f8"))
+      ++cap_promos;
   }
   EXPECT_EQ(cap_promos, 4);
 
@@ -228,7 +235,7 @@ TEST(Board, PromotionQuietAndCapture) {
 
 TEST(Board, PinnedPieceCannotLeaveKingInCheck) {
   Board pin = Board::from_fen("4k3/8/8/8/8/8/8/r2NK3 w - - 0 1");
-  for (const Move& m : pin.legal_moves()) {
+  for (const Move &m : pin.legal_moves()) {
     EXPECT_NE(type_of(pin.piece_at(m.from)), PieceType::Knight);
   }
 }
@@ -255,7 +262,7 @@ TEST(Board, FiftyMoveRule) {
 
 TEST(Board, ThreefoldRepetition) {
   Board b;
-  auto play = [&](const char* u) { b.make(b.parse_uci(u)); };
+  auto play = [&](const char *u) { b.make(b.parse_uci(u)); };
   play("g1f3");
   play("g8f6");
   play("f3g1");
@@ -319,9 +326,11 @@ TEST(Search, FindsMateInOne) {
 }
 
 TEST(Search, ModesDoNotCorruptBoard) {
-  const std::string fen = "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
+  const std::string fen =
+      "r1bqkbnr/pppp1ppp/2n5/4p3/4P3/5N2/PPPP1PPP/RNBQKB1R w KQkq - 2 3";
   Board b = Board::from_fen(fen);
-  for (auto mode : {SearchMode::Minimax, SearchMode::AlphaBeta, SearchMode::AlphaBetaQuiescence}) {
+  for (auto mode : {SearchMode::Minimax, SearchMode::AlphaBeta,
+                    SearchMode::AlphaBetaQuiescence}) {
     SearchLimits lim;
     lim.depth = (mode == SearchMode::Minimax) ? 2 : 3;
     lim.mode = mode;

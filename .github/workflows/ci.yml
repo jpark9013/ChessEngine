@@ -60,11 +60,12 @@ jobs:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     needs: [cpp-lint, cpp-test, python-lint, python-test]
     runs-on: ubuntu-latest
+    env:
+      FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}
     steps:
       - uses: actions/checkout@v4
       - uses: superfly/flyctl-actions/setup-flyctl@master
+        if: env.FLY_API_TOKEN != ''
       - name: Deploy Fly worker
-        if: ${{ secrets.FLY_API_TOKEN != '' }}
+        if: env.FLY_API_TOKEN != ''
         run: flyctl deploy --remote-only
-        env:
-          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

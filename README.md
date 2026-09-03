@@ -105,7 +105,7 @@ See [docs/cpp-api.md](docs/cpp-api.md) and [docs/architecture.md](docs/architect
 
 ## Lichess bot
 
-[docs/bot.md](docs/bot.md) — homemade adapter in `bot/`, always-on Fly worker (`fly.toml`, 2 GB). The live bot only plays bullet with base ≤ 120s (1+0, 2+1, …). CI runs tests on every branch, a Stockfish Elo-1600 gauntlet, and deploys from `main` when `FLY_API_TOKEN` is set and the gauntlet scores ≥ 35%.
+[docs/bot.md](docs/bot.md) — homemade adapter in `bot/`, always-on Fly worker (`fly.toml`, 2 GB). The live bot only plays bullet with base ≤ 120s (1+0, 2+1, …). CI runs tests on every branch, a Stockfish Elo-2200 gauntlet (4×30s and 4×60s), and deploys from `main` when `FLY_API_TOKEN` is set and the gauntlet scores at least 4 points in 8 games.
 
 ## What this engine is not
 

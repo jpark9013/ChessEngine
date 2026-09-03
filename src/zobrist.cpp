@@ -32,24 +32,14 @@ void fill() {
 void init() { std::call_once(once, fill); }
 
 std::uint64_t piece(Piece p, Square sq) {
-  init();
   if (p == Piece::None || !sq.valid()) return 0;
   return piece_keys[static_cast<int>(p) - 1][sq.index()];
 }
 
-std::uint64_t side_to_move() {
-  init();
-  return side_key;
-}
+std::uint64_t side_to_move() { return side_key; }
 
-std::uint64_t castle(int rights) {
-  init();
-  return castle_keys[rights & 15];
-}
+std::uint64_t castle(int rights) { return castle_keys[rights & 15]; }
 
-std::uint64_t en_passant_file(int file) {
-  init();
-  return ep_keys[file & 7];
-}
+std::uint64_t en_passant_file(int file) { return ep_keys[file & 7]; }
 
 }  // namespace chess::zobrist

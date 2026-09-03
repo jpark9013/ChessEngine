@@ -1,28 +1,37 @@
 #!/usr/bin/env python3
 """Gauntlet: our engine vs strength-limited Stockfish.
 
-Used as the CI publish floor. Both sides get the same movetime. Openings are
-short fixed lines so games are not identical. Requires python-chess, a
-Stockfish binary, and the chessengine module on PYTHONPATH.
+Used as the CI publish floor. Four games are 30+0 and four are 60+0, both
+sides on the same clock. Openings are short fixed lines so games are not
+identical. Requires python-chess, a Stockfish binary, and the chessengine
+module on PYTHONPATH.
 """
 
 from __future__ import annotations
 
 import argparse
+import atexit
 import math
+import multiprocessing
 import os
 import shutil
 import sys
+from collections.abc import Iterator
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 
-DEFAULT_GAMES = 40
-DEFAULT_ELO = 1600
-DEFAULT_MIN_SCORE = 0.35
-DEFAULT_MOVETIME_MS = 200
+DEFAULT_GAMES = 8
+DEFAULT_ELO = 2200
+DEFAULT_MIN_POINTS = 4.0
+DEFAULT_CONCURRENCY = 2
 DEFAULT_MAX_PLY = 180
+CLOCK_SHORT_S = 30.0
+CLOCK_LONG_S = 60.0
 SF_THREADS = 1
 SF_HASH_MB = 16
+
+_WORKER_ENGINE: object | None = None
 
 OPENINGS: list[list[str]] = [
     [],
@@ -38,6 +47,16 @@ OPENINGS: list[list[str]] = [
     ["g1f3"],
     ["e2e4", "e7e5", "g1f3", "b8c6"],
 ]
+
+
+@dataclass(frozen=True)
+class GameRecord:
+    index: int
+    result: str
+    ply: int
+    we_are_white: bool
+    clock_s: float
+    pgn: str
 
 
 @dataclass(frozen=True)
@@ -117,14 +136,19 @@ def _configure_stockfish(engine: object, elo: int) -> str:
     raise RuntimeError("Stockfish has neither UCI_Elo nor Skill Level")
 
 
-def _our_move(fen: str, movetime_s: float) -> str:
-    from engine import search_position
+def _clock_for_game(index: int) -> float:
+    return CLOCK_SHORT_S if index % 2 == 0 else CLOCK_LONG_S
 
+
+def _our_move(fen: str, clock_s: float, ply: int) -> str:
+    from engine import allocate_time, search_position
+
+    budget = allocate_time(clock_s, 0.0, None, ply=ply)
     result = search_position(
         fen,
-        max_seconds=movetime_s,
-        target_seconds=max(0.04, movetime_s * 0.85),
-        depth=12,
+        max_seconds=budget.hard,
+        target_seconds=budget.target,
+        depth=budget.max_depth,
     )
     return str(result["uci"])
 
@@ -134,10 +158,12 @@ def _play_game(
     stockfish: object,
     opening: list[str],
     we_are_white: bool,
-    movetime_s: float,
+    clock_s: float,
     max_ply: int,
 ) -> tuple[str, object]:
     """Return (result_from_our_side, board). result is 1-0, 0-1, 1/2-1/2, illegal, crash."""
+    import time
+
     import chess
     import chess.engine
 
@@ -145,11 +171,17 @@ def _play_game(
     for uci in opening:
         board.push_uci(uci)
 
+    white_clock = clock_s
+    black_clock = clock_s
+
     while not board.is_game_over(claim_draw=True) and board.ply() < max_ply:
-        ours = (board.turn == chess.WHITE) == we_are_white
+        mover_white = board.turn == chess.WHITE
+        ours = mover_white == we_are_white
+        side_clock = white_clock if mover_white else black_clock
+        started = time.perf_counter()
         if ours:
             try:
-                uci = _our_move(board.fen(), movetime_s)
+                uci = _our_move(board.fen(), side_clock, board.ply())
                 move = chess.Move.from_uci(uci)
             except Exception:
                 return "crash", board
@@ -158,11 +190,27 @@ def _play_game(
             board.push(move)
         else:
             played = stockfish.play(  # type: ignore[attr-defined]
-                board, chess.engine.Limit(time=movetime_s)
+                board,
+                chess.engine.Limit(
+                    white_clock=white_clock,
+                    black_clock=black_clock,
+                    white_inc=0.0,
+                    black_inc=0.0,
+                ),
             )
             if played.move is None:
                 return "crash", board
             board.push(played.move)
+
+        elapsed = time.perf_counter() - started
+        if mover_white:
+            white_clock -= elapsed
+            flagged = white_clock <= 0.0
+        else:
+            black_clock -= elapsed
+            flagged = black_clock <= 0.0
+        if flagged:
+            return ("0-1" if ours else "1-0"), board
 
     outcome = board.outcome(claim_draw=True)
     if outcome is None:
@@ -173,84 +221,187 @@ def _play_game(
     return ("1-0" if we_won else "0-1"), board
 
 
-def run_gauntlet(args: argparse.Namespace) -> MatchScore:
-    import chess.engine
+def _board_pgn(board: object, we_are_white: bool) -> str:
     import chess.pgn
 
-    sf_path = _find_stockfish(args.stockfish)
-    movetime_s = args.movetime_ms / 1000.0
-    pgn_path = Path(args.pgn) if args.pgn else None
+    game = chess.pgn.Game.from_board(board)
+    game.headers["Event"] = "ChessEngine gauntlet"
+    game.headers["White"] = "ChessEngine" if we_are_white else "Stockfish"
+    game.headers["Black"] = "Stockfish" if we_are_white else "ChessEngine"
+    outcome = board.outcome(claim_draw=True)  # type: ignore[attr-defined]
+    game.headers["Result"] = outcome.result() if outcome else "1/2-1/2"
+    return str(game)
 
-    wins = draws = losses = crashes = illegal = 0
+
+def _record_from_play(
+    index: int,
+    stockfish: object,
+    max_ply: int,
+) -> GameRecord:
+    we_are_white = index % 2 == 0
+    clock_s = _clock_for_game(index)
+    result, board = _play_game(
+        stockfish=stockfish,
+        opening=OPENINGS[index % len(OPENINGS)],
+        we_are_white=we_are_white,
+        clock_s=clock_s,
+        max_ply=max_ply,
+    )
+    return GameRecord(
+        index=index,
+        result=result,
+        ply=board.ply(),
+        we_are_white=we_are_white,
+        clock_s=clock_s,
+        pgn=_board_pgn(board, we_are_white),
+    )
+
+
+def _apply_result(
+    result: str, wins: int, draws: int, losses: int, crashes: int, illegal: int
+) -> tuple[str, int, int, int, int, int]:
+    if result == "crash":
+        return "crash-loss", wins, draws, losses + 1, crashes + 1, illegal
+    if result == "illegal":
+        return "illegal-loss", wins, draws, losses + 1, crashes, illegal + 1
+    if result == "1-0":
+        return "win", wins + 1, draws, losses, crashes, illegal
+    if result == "0-1":
+        return "loss", wins, draws, losses + 1, crashes, illegal
+    return "draw", wins, draws + 1, losses, crashes, illegal
+
+
+def _print_game(
+    record: GameRecord, games: int, tag: str, wins: int, draws: int, losses: int
+) -> None:
+    color = "white" if record.we_are_white else "black"
+    print(
+        f"  game {record.index + 1}/{games}  us={color}  {tag}  "
+        f"clock={record.clock_s:.0f}s  ply={record.ply}  W-D-L {wins}-{draws}-{losses}",
+        flush=True,
+    )
+
+
+def _write_pgn(path: Path, records: list[GameRecord | None]) -> None:
+    with path.open("w", encoding="utf-8") as fh:
+        for record in records:
+            if record is None:
+                continue
+            print(record.pgn, file=fh, end="\n\n")
+
+
+def _probe_strength(sf_path: Path, elo: int) -> str:
+    import chess.engine
+
     engine = chess.engine.SimpleEngine.popen_uci(str(sf_path))
     try:
-        strength = _configure_stockfish(engine, args.elo)
-        print(f"Stockfish: {sf_path}")
-        print(f"Strength: {strength}")
-        print(
-            f"Games: {args.games}  movetime: {args.movetime_ms}ms  "
-            f"min score: {args.min_score:.0%}"
-        )
-
-        pgn_file = pgn_path.open("w", encoding="utf-8") if pgn_path else None
-        try:
-            for i in range(args.games):
-                opening = OPENINGS[i % len(OPENINGS)]
-                we_are_white = i % 2 == 0
-                result, board = _play_game(
-                    stockfish=engine,
-                    opening=opening,
-                    we_are_white=we_are_white,
-                    movetime_s=movetime_s,
-                    max_ply=args.max_ply,
-                )
-                if result == "crash":
-                    crashes += 1
-                    losses += 1
-                    tag = "crash-loss"
-                elif result == "illegal":
-                    illegal += 1
-                    losses += 1
-                    tag = "illegal-loss"
-                elif result == "1-0":
-                    wins += 1
-                    tag = "win"
-                elif result == "0-1":
-                    losses += 1
-                    tag = "loss"
-                else:
-                    draws += 1
-                    tag = "draw"
-
-                color = "white" if we_are_white else "black"
-                print(
-                    f"  game {i + 1}/{args.games}  us={color}  {tag}  "
-                    f"ply={board.ply()}  W-D-L {wins}-{draws}-{losses}",
-                    flush=True,
-                )
-
-                if pgn_file is not None:
-                    game = chess.pgn.Game.from_board(board)
-                    game.headers["Event"] = "ChessEngine gauntlet"
-                    game.headers["White"] = "ChessEngine" if we_are_white else "Stockfish"
-                    game.headers["Black"] = "Stockfish" if we_are_white else "ChessEngine"
-                    game.headers["Result"] = (
-                        board.outcome(claim_draw=True).result()
-                        if board.outcome(claim_draw=True)
-                        else "1/2-1/2"
-                    )
-                    print(game, file=pgn_file, end="\n\n")
-
-                if result in {"crash", "illegal"}:
-                    print(f"aborting gauntlet after {result}", flush=True)
-                    break
-        finally:
-            if pgn_file is not None:
-                pgn_file.close()
+        return _configure_stockfish(engine, elo)
     finally:
         engine.quit()
 
+
+def _init_worker(sf_path: str, elo: int) -> None:
+    global _WORKER_ENGINE
+    import chess.engine
+
+    _WORKER_ENGINE = chess.engine.SimpleEngine.popen_uci(sf_path)
+    _configure_stockfish(_WORKER_ENGINE, elo)
+    atexit.register(_shutdown_worker)
+
+
+def _shutdown_worker() -> None:
+    global _WORKER_ENGINE
+    engine = _WORKER_ENGINE
+    _WORKER_ENGINE = None
+    if engine is not None:
+        engine.quit()  # type: ignore[attr-defined]
+
+
+def _worker_play(index: int, max_ply: int) -> GameRecord:
+    assert _WORKER_ENGINE is not None
+    return _record_from_play(index, _WORKER_ENGINE, max_ply)
+
+
+def run_gauntlet(args: argparse.Namespace) -> MatchScore:
+    sf_path = _find_stockfish(args.stockfish)
+    pgn_path = Path(args.pgn) if args.pgn else None
+    concurrency = min(args.concurrency, args.games)
+
+    strength = _probe_strength(sf_path, args.elo)
+    print(f"Stockfish: {sf_path}")
+    print(f"Strength: {strength}")
+    n_short = (args.games + 1) // 2
+    n_long = args.games // 2
+    print(
+        f"Games: {args.games}  concurrency: {concurrency}  "
+        f"clocks: {CLOCK_SHORT_S:.0f}s x{n_short}, {CLOCK_LONG_S:.0f}s x{n_long}  "
+        f"min points: {args.min_points:g}"
+    )
+
+    if concurrency <= 1:
+        stream = _iter_serial(args.games, str(sf_path), args.elo, args.max_ply)
+    else:
+        stream = _iter_parallel(
+            args.games, str(sf_path), args.elo, args.max_ply, concurrency
+        )
+
+    wins = draws = losses = crashes = illegal = 0
+    ordered: list[GameRecord | None] = [None] * args.games
+    for record in stream:
+        ordered[record.index] = record
+        tag, wins, draws, losses, crashes, illegal = _apply_result(
+            record.result, wins, draws, losses, crashes, illegal
+        )
+        _print_game(record, args.games, tag, wins, draws, losses)
+        if record.result in {"crash", "illegal"}:
+            print(f"aborting gauntlet after {record.result}", flush=True)
+            break
+
+    if pgn_path is not None:
+        _write_pgn(pgn_path, ordered)
+
     return MatchScore(wins=wins, draws=draws, losses=losses, crashes=crashes, illegal=illegal)
+
+
+def _iter_serial(
+    games: int, sf_path: str, elo: int, max_ply: int
+) -> Iterator[GameRecord]:
+    import chess.engine
+
+    engine = chess.engine.SimpleEngine.popen_uci(sf_path)
+    try:
+        _configure_stockfish(engine, elo)
+        for i in range(games):
+            record = _record_from_play(i, engine, max_ply)
+            yield record
+            if record.result in {"crash", "illegal"}:
+                return
+    finally:
+        engine.quit()
+
+
+def _iter_parallel(
+    games: int,
+    sf_path: str,
+    elo: int,
+    max_ply: int,
+    concurrency: int,
+) -> Iterator[GameRecord]:
+    ctx = multiprocessing.get_context("spawn")
+    with ProcessPoolExecutor(
+        max_workers=concurrency,
+        mp_context=ctx,
+        initializer=_init_worker,
+        initargs=(sf_path, elo),
+    ) as pool:
+        futures = {pool.submit(_worker_play, i, max_ply): i for i in range(games)}
+        for fut in as_completed(futures):
+            record = fut.result()
+            yield record
+            if record.result in {"crash", "illegal"}:
+                for other in futures:
+                    other.cancel()
+                return
 
 
 def _write_summary(score: MatchScore, args: argparse.Namespace) -> None:
@@ -261,7 +412,7 @@ def _write_summary(score: MatchScore, args: argparse.Namespace) -> None:
         f"score {score.points:.1f}/{score.games} ({score.fraction:.1%})",
         f"estimated Elo difference: {diff_s}",
         f"crashes: {score.crashes}  illegal: {score.illegal}",
-        f"opponent Elo setting: {args.elo}  movetime: {args.movetime_ms}ms",
+        f"opponent Elo setting: {args.elo}  clocks: {CLOCK_SHORT_S:.0f}s/{CLOCK_LONG_S:.0f}s",
     ]
     text = "\n".join(lines)
     print(text)
@@ -273,8 +424,8 @@ def _write_summary(score: MatchScore, args: argparse.Namespace) -> None:
                 "",
                 f"- Result: **{score.wins}-{score.draws}-{score.losses}** "
                 f"({score.fraction:.1%})",
-                f"- Floor: {args.min_score:.0%} vs UCI_Elo {args.elo}",
-                f"- Movetime: {args.movetime_ms} ms",
+                f"- Floor: {args.min_points:g} points vs UCI_Elo {args.elo}",
+                f"- Clocks: {CLOCK_SHORT_S:.0f}s x4, {CLOCK_LONG_S:.0f}s x4",
                 f"- Elo diff (logistic): {diff_s}",
                 f"- Crashes: {score.crashes}, illegal moves: {score.illegal}",
                 "",
@@ -288,8 +439,18 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     p = argparse.ArgumentParser(description=__doc__)
     p.add_argument("--games", type=int, default=DEFAULT_GAMES)
     p.add_argument("--elo", type=int, default=DEFAULT_ELO, help="Stockfish UCI_Elo")
-    p.add_argument("--min-score", type=float, default=DEFAULT_MIN_SCORE)
-    p.add_argument("--movetime-ms", type=int, default=DEFAULT_MOVETIME_MS)
+    p.add_argument(
+        "--min-points",
+        type=float,
+        default=DEFAULT_MIN_POINTS,
+        help="Minimum points (win=1, draw=0.5, loss=0)",
+    )
+    p.add_argument(
+        "--concurrency",
+        type=int,
+        default=DEFAULT_CONCURRENCY,
+        help="Games to play in parallel (default 2)",
+    )
     p.add_argument("--max-ply", type=int, default=DEFAULT_MAX_PLY)
     p.add_argument("--stockfish", default=None, help="Path to Stockfish binary")
     p.add_argument("--pgn", default=None, help="Write games to this PGN path")
@@ -313,6 +474,9 @@ def main(argv: list[str] | None = None) -> int:
     if args.games < 1:
         print("games must be >= 1", file=sys.stderr)
         return 2
+    if args.concurrency < 1:
+        print("concurrency must be >= 1", file=sys.stderr)
+        return 2
     try:
         score = run_gauntlet(args)
     except FileNotFoundError as exc:
@@ -333,9 +497,9 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    if score.fraction + 1e-9 < args.min_score:
+    if score.points + 1e-9 < args.min_points:
         print(
-            f"FAIL: score {score.fraction:.1%} < floor {args.min_score:.0%}",
+            f"FAIL: score {score.points:.1f}/{score.games} < floor {args.min_points:g}",
             file=sys.stderr,
         )
         return 1

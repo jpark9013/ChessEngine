@@ -74,16 +74,16 @@ Each iteration tries every legal move with PVS, then calls:
 
 Interior nodes generate **captures first**, then quiets only if there is no cutoff. Moves are tried with make/unmake; those that leave the king in check are skipped.
 
-`max_seconds` is a hard abort (checked every 256 nodes). `target_seconds` is a soft stop: do not start the next iteration if the target is gone or the last iteration would not fit (~1.5×). If `target_seconds` is 0 and a hard cap is set, the soft bound is 70% of the hard cap.
+`max_seconds` is a hard abort (checked every 256 nodes) — the most the clock will allow if the PV is thrashing. `target_seconds` is the optimum: stop starting new iterations once the best move and eval have been stable, or if the last iteration would not fit (~1.5×). Unstable PVs ignore the optimum and spend toward the hard cap. If `target_seconds` is 0 and a hard cap is set, the soft bound is 70% of the hard cap.
 
 Mate is `100000 - ply` so shorter mates score higher. Draw by 50-move or repetition returns 0 inside the tree. The search always unmakes before returning.
 
-The transposition table is process-lifetime (~1M entries). Killers and history reset at the start of each root search.
+The transposition table is process-lifetime (~1M × 16-byte entries, four per cache line). Killers and history reset at the start of each root search.
 
 ## Hash
 
-Zobrist keys are filled from `mt19937_64` with a fixed seed, so hashes are reproducible across runs. The hash includes pieces, side to move, all 16 castling-right combinations, and en passant file.
+Zobrist keys are filled from `mt19937_64` with a fixed seed, so hashes are reproducible across runs. The hash includes pieces, side to move, all 16 castling-right combinations, and en passant file. `put` / `remove` xor piece keys; `make` xors castling, en passant, and side so search does not rescan the board.
 
 ## Bitboards
 
-`put` / `remove` update both the mailbox and the piece/color bitboards. `is_attacked` and `generate_pseudo` bitscan attack sets. Sliders use occupancy-masked rays (not magic bitboards). The public `Move` / `Board` API is unchanged.
+`put` / `remove` update both the mailbox and the piece/color bitboards. `is_attacked` and `generate_pseudo` bitscan attack sets. Sliders use occupancy-masked rays (not magic bitboards). Attack tables are cache-line aligned and initialized once. `Move` is 4 bytes (`Square` is a `uint8_t` index). Undo/history live in fixed arrays on `Board`. The public `Move` / `Board` API is unchanged.

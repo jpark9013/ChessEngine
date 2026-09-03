@@ -49,18 +49,27 @@ class TestAdapter(unittest.TestCase):
         self.assertLessEqual(low.target, low.hard)
 
         full_bullet = allocate_time(60.0, 0.0, None)
-        self.assertLessEqual(full_bullet.target, 2.6)
-        self.assertLessEqual(full_bullet.hard, 4.1)
-        self.assertGreater(full_bullet.max_depth, 8)
+        self.assertLessEqual(full_bullet.target, 0.05)
+        self.assertLessEqual(full_bullet.hard, 0.11)
+        self.assertLess(full_bullet.target, full_bullet.hard)
+        self.assertGreater(full_bullet.max_depth, 6)
+
+        with_inc = allocate_time(10.0, 1.0, None)
+        no_inc = allocate_time(10.0, 0.0, None)
+        self.assertGreaterEqual(with_inc.hard, no_inc.hard - 1e-9)
+
+        mid_bullet = allocate_time(30.0, 0.0, None, ply=20)
+        self.assertLessEqual(mid_bullet.target, 0.05)
+        self.assertLessEqual(mid_bullet.hard, 0.11)
 
         panic = allocate_time(0.3, 0.0, None)
         self.assertLessEqual(panic.hard, 0.12)
-        self.assertEqual(panic.max_depth, 1)
+        self.assertLessEqual(panic.max_depth, 4)
 
     def test_depth_allocator(self) -> None:
         self.assertEqual(choose_depth(0.3, None), 1)
         self.assertEqual(choose_depth(5.0, 4), 4)
-        self.assertEqual(choose_depth(60.0, None), 24)
+        self.assertEqual(choose_depth(60.0, None), 16)
         self.assertEqual(choose_depth(60.0, 6), 6)
 
 

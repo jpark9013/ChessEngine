@@ -132,8 +132,9 @@ class Square {
   static constexpr int none_index = 64;
 
   constexpr Square() : index_(none_index) {}
-  explicit constexpr Square(int index) : index_(index) {}
-  constexpr Square(int rank, int file) : index_(rank * 8 + file) {}
+  explicit constexpr Square(int index) : index_(static_cast<std::uint8_t>(index)) {}
+  constexpr Square(int rank, int file)
+      : index_(static_cast<std::uint8_t>(rank * 8 + file)) {}
 
   static Square from_algebraic(std::string_view s) {
     if (s.size() != 2 || s[0] < 'a' || s[0] > 'h' || s[1] < '1' || s[1] > '8') {
@@ -145,7 +146,7 @@ class Square {
   constexpr int index() const { return index_; }
   constexpr int rank() const { return index_ >> 3; }
   constexpr int file() const { return index_ & 7; }
-  constexpr bool valid() const { return index_ >= 0 && index_ < 64; }
+  constexpr bool valid() const { return index_ < 64; }
 
   std::string algebraic() const {
     if (!valid()) return "-";
@@ -156,7 +157,7 @@ class Square {
   friend constexpr bool operator!=(Square a, Square b) { return !(a == b); }
 
  private:
-  int index_;
+  std::uint8_t index_;
 };
 
 inline constexpr bool on_board(int rank, int file) {
@@ -207,6 +208,8 @@ inline bool operator==(const Move& a, const Move& b) {
 }
 
 inline bool operator!=(const Move& a, const Move& b) { return !(a == b); }
+
+static_assert(sizeof(Move) == 4, "Move should pack to 4 bytes for move-list locality");
 
 class MoveList {
  public:

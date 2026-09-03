@@ -59,7 +59,7 @@ jobs:
   strength:
     needs: [cpp-test, python-test]
     runs-on: ubuntu-latest
-    timeout-minutes: 45
+    timeout-minutes: 25
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -85,17 +85,14 @@ jobs:
             -DPython_EXECUTABLE="$(uv python find)"
           cmake --build build -j
       - name: Gauntlet vs Stockfish
-        env:
-          GAUNTLET_GAMES: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && '40' || '8' }}
-          GAUNTLET_MIN_SCORE: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && '0.35' || '0' }}
         run: |
           uv sync --group strength
           PYTHONPATH=build:bot uv run python scripts/gauntlet.py \
             --stockfish "$(command -v stockfish)" \
-            --games "$GAUNTLET_GAMES" \
-            --elo 1600 \
-            --movetime-ms 200 \
-            --min-score "$GAUNTLET_MIN_SCORE" \
+            --games 8 \
+            --elo 2200 \
+            --min-points 4 \
+            --concurrency 2 \
             --pgn gauntlet.pgn
       - name: Upload PGN
         if: always()

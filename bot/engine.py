@@ -1,7 +1,9 @@
 """FEN search contract used by the lichess-bot homemade adapter.
 
-Time management is for 1+0 and faster (base <= 60s). Iterative deepening
-in C++ spends up to `target` seconds and aborts at `hard`.
+Two-layer bullet clocks. The allocator sets an *optimum* (`target`) and a
+*maximum* (`hard`). Iterative deepening in C++ stops at the optimum when the
+PV is stable, and spends toward the maximum only when the best move or eval
+keeps swinging.
 """
 
 from __future__ import annotations
@@ -12,16 +14,31 @@ import chessengine as ce
 
 START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-# Never dump this much of a 60s clock on one move; ID uses the rest of the budget
-# across later plies instead of a single fixed depth.
-_MAX_TARGET = 2.5
-_MAX_HARD = 4.0
+# Optimum / maximum for a healthy 30–60s clock. Unstable positions may use hard.
+_MAX_TARGET = 0.035
+_MAX_HARD = 0.10
 
 
 class TimeBudget(NamedTuple):
     target: float
     hard: float
     max_depth: int
+
+
+def _expected_moves(ply: int) -> int:
+    """Moves we still budget for. Stays conservative so we never dump the clock."""
+    made = max(0, ply // 2)
+    return max(10, 32 - made // 2)
+
+
+def _depth_for_budget(hard: float) -> int:
+    if hard < 0.04:
+        return 4
+    if hard < 0.08:
+        return 8
+    if hard < 0.12:
+        return 12
+    return 16
 
 
 def _depth_for_clock(clock: float) -> int:
@@ -33,44 +50,50 @@ def _depth_for_clock(clock: float) -> int:
         return 6
     if clock < 10.0:
         return 12
-    return 24
+    return 16
 
 
 def allocate_time(
     our: float | None,
     inc: float | None,
     sudden: float | None,
+    ply: int = 0,
 ) -> TimeBudget:
-    """Soft/hard think time for ultrabullet and 1+0-class games."""
+    """Optimum and maximum think time from the UCI clock.
+
+    `target` is how long a stable position should take. `hard` is the extra
+    budget search may spend if the PV is unstable. Increment raises both;
+    a 0-increment bullet clock stays stingy.
+    """
     if sudden is not None and sudden > 0:
-        hard = max(0.04, min(_MAX_HARD, sudden * 0.90 - 0.05))
-        target = max(0.03, min(hard * 0.75, sudden * 0.70))
-        return TimeBudget(target, hard, _depth_for_clock(sudden))
+        hard = max(0.03, min(_MAX_HARD, sudden * 0.85))
+        target = max(0.012, min(_MAX_TARGET, hard * 0.45))
+        return TimeBudget(target, hard, _depth_for_budget(hard))
 
-    clock = our if our is not None else 5.0
-    increment = inc if inc is not None else 0.0
+    clock = float(our if our is not None else 5.0)
+    increment = float(inc if inc is not None else 0.0)
+    ply = max(0, int(ply))
 
-    if clock <= 0.25:
-        return TimeBudget(0.02, min(0.06, max(0.03, clock * 0.5)), _depth_for_clock(clock))
-    if clock <= 0.8:
-        hard = min(0.12, max(0.04, clock * 0.18))
-        return TimeBudget(max(0.02, hard * 0.6), hard, _depth_for_clock(clock))
-    if clock <= 2.0:
-        hard = min(0.22, clock * 0.12)
-        return TimeBudget(max(0.04, hard * 0.65), hard, _depth_for_clock(clock))
+    if clock <= 0.20:
+        hard = min(0.04, max(0.015, clock * 0.35))
+        return TimeBudget(min(0.012, hard * 0.6), hard, 2)
+    if clock <= 0.60:
+        hard = min(0.06, clock * 0.12)
+        target = min(0.025, hard * 0.50)
+        return TimeBudget(target, max(target, hard), 4)
 
-    if increment <= 0:
-        target = clock / 30.0
-        hard = min(clock * 0.10, target * 2.8, clock - 0.20)
-    else:
-        target = clock / 28.0 + increment * 0.70
-        hard = min(clock * 0.12, target * 2.5, clock - 0.15)
-
-    target = max(0.04, min(_MAX_TARGET, target))
-    hard = max(target + 0.03, min(_MAX_HARD, hard))
-    hard = min(hard, max(0.05, clock - 0.12))
-    target = min(target, hard * 0.8)
-    return TimeBudget(target, hard, _depth_for_clock(clock))
+    reserve = 0.20
+    usable = max(0.05, clock - reserve)
+    base = usable / _expected_moves(ply) + increment * 0.45
+    hard = min(_MAX_HARD, max(0.04, base * 1.8), usable * 0.06)
+    target = min(_MAX_TARGET, max(0.012, hard * 0.40, base * 0.25))
+    if clock < 8.0:
+        scale = max(0.35, clock / 8.0)
+        target *= scale
+        hard *= scale
+    hard = min(hard, max(0.04, clock - 0.08))
+    target = min(target, hard * 0.75)
+    return TimeBudget(target, hard, _depth_for_budget(hard))
 
 
 def choose_depth(our: float | None, requested: int | None) -> int:

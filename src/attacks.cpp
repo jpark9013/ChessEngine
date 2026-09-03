@@ -13,10 +13,7 @@ constexpr int kKnightF[8] = {1, -1, 1, -1, 2, -2, 2, -2};
 constexpr int kKingR[8] = {1, 1, 1, 0, 0, -1, -1, -1};
 constexpr int kKingF[8] = {-1, 0, 1, -1, 1, -1, 0, 1};
 
-std::array<std::array<Bitboard, 64>, 8> rays{};
-std::array<Bitboard, 64> knight_att{};
-std::array<Bitboard, 64> king_att{};
-std::array<std::array<Bitboard, 64>, 2> pawn_att{};
+alignas(64) std::array<std::array<Bitboard, 64>, 8> rays{};
 std::once_flag once;
 
 bool positive_dir(int d) { return kDr[d] > 0 || (kDr[d] == 0 && kDf[d] > 0); }
@@ -70,31 +67,18 @@ Bitboard ray_attacks(int sq, Bitboard occ, int d) {
 
 }  // namespace
 
+alignas(64) Bitboard pawn_att[2][64]{};
+alignas(64) Bitboard knight_att[64]{};
+alignas(64) Bitboard king_att[64]{};
+
 void init() { std::call_once(once, fill); }
 
-Bitboard pawn(Color c, int sq) {
-  init();
-  return pawn_att[static_cast<int>(c)][sq];
-}
-
-Bitboard knight(int sq) {
-  init();
-  return knight_att[sq];
-}
-
-Bitboard king(int sq) {
-  init();
-  return king_att[sq];
-}
-
 Bitboard bishop(int sq, Bitboard occ) {
-  init();
   return ray_attacks(sq, occ, 4) | ray_attacks(sq, occ, 5) | ray_attacks(sq, occ, 6) |
          ray_attacks(sq, occ, 7);
 }
 
 Bitboard rook(int sq, Bitboard occ) {
-  init();
   return ray_attacks(sq, occ, 0) | ray_attacks(sq, occ, 1) | ray_attacks(sq, occ, 2) |
          ray_attacks(sq, occ, 3);
 }

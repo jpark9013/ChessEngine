@@ -2,10 +2,14 @@
 #include <pybind11/stl.h>
 
 #include "chess.hpp"
+#include "attacks.hpp"
+#include "zobrist.hpp"
 
 namespace py = pybind11;
 
 PYBIND11_MODULE(chessengine, m) {
+  chess::attacks::init();
+  chess::zobrist::init();
   m.doc() = "ChessEngine: legal move generation, search, FEN, and SAN/UCI notation.";
 
   py::enum_<chess::Color>(m, "Color")

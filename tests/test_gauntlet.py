@@ -8,7 +8,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
-from gauntlet import elo_from_score, score_fraction
+from gauntlet import MatchScore, _clock_for_game, _parse_args, elo_from_score, score_fraction
 
 
 class TestGauntletScore(unittest.TestCase):
@@ -23,8 +23,24 @@ class TestGauntletScore(unittest.TestCase):
         self.assertEqual(score_fraction(0, 0, 0), 0.0)
 
     def test_floor_example(self) -> None:
-        # 40 games, 35% floor: 8 wins + 12 draws + 20 losses = 14/40 = 35%
-        self.assertAlmostEqual(score_fraction(8, 12, 20), 0.35)
+        # 8 games, 4-point floor: 3 wins + 2 draws + 3 losses = 4.0
+        self.assertEqual(MatchScore(3, 2, 3).points, 4.0)
+        self.assertAlmostEqual(score_fraction(3, 2, 3), 0.5)
+
+    def test_below_floor_is_less_than_four(self) -> None:
+        self.assertLess(MatchScore(3, 1, 4).points, 4.0)
+
+    def test_cli_defaults(self) -> None:
+        args = _parse_args([])
+        self.assertEqual(args.games, 8)
+        self.assertEqual(args.min_points, 4.0)
+        self.assertEqual(args.concurrency, 2)
+        self.assertEqual(args.elo, 2200)
+
+    def test_clocks_split_eight_games(self) -> None:
+        clocks = [_clock_for_game(i) for i in range(8)]
+        self.assertEqual(clocks.count(30.0), 4)
+        self.assertEqual(clocks.count(60.0), 4)
 
     def test_elo_even_is_zero(self) -> None:
         diff = elo_from_score(0.5)

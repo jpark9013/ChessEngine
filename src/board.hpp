@@ -7,7 +7,6 @@
 #include <cstdint>
 #include <ostream>
 #include <string_view>
-#include <vector>
 
 namespace chess {
 
@@ -41,7 +40,7 @@ class Board {
   int fullmove_number() const { return fullmove_; }
   Square king_square(Color c) const { return c == Color::White ? white_king_ : black_king_; }
   std::uint64_t hash() const { return hash_; }
-  int ply_from_root() const { return static_cast<int>(undo_.size()); }
+  int ply_from_root() const { return undo_count_; }
 
   void set_piece(Square sq, Piece p);
   void clear();
@@ -106,8 +105,11 @@ class Board {
   int king_mg_ = 0;
   int king_eg_ = 0;
   int queens_ = 0;
-  std::vector<Undo> undo_;
-  std::vector<std::uint64_t> history_;
+  static constexpr int kMaxUndo = 512;
+  Undo undo_[kMaxUndo]{};
+  std::uint64_t history_[kMaxUndo]{};
+  int undo_count_ = 0;
+  int hist_count_ = 0;
 };
 
 inline std::ostream& operator<<(std::ostream& os, const Board& b) {

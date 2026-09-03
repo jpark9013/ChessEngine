@@ -39,17 +39,17 @@ PYTHONPATH=build:bot uv run python -m unittest discover -s tests -p 'test_*.py' 
 
 ## Strength floor (Stockfish gauntlet)
 
-CI job `strength` plays our engine against **Stockfish 17.1** with `UCI_LimitStrength` and `UCI_Elo=1600`. Both sides get **200 ms** per move. Deploy from `main` requires a score of **≥ 35%** over 40 games (20 as white, 20 as black). Any crash or illegal move fails the job immediately. Pull requests run 8 games with no score floor so rating variance cannot block a PR, but a crash or illegal move still fails.
+CI job `strength` plays our engine against **Stockfish 17.1** with `UCI_LimitStrength` and `UCI_Elo=2200`. Four games are **30+0** and four are **60+0**, two at a time. Our side uses the same two-layer clock as the live bot (optimum ~35ms, maximum ~100ms if the PV is unstable). Deploy requires **≥ 4 points** over 8 games (win = 1, draw = 0.5, loss = 0). Any crash or illegal move fails the job immediately.
 
 ```bash
 uv sync --group strength
 PYTHONPATH=build:bot uv run python scripts/gauntlet.py \
   --stockfish /path/to/stockfish \
-  --games 40 --elo 1600 --movetime-ms 200 --min-score 0.35 \
+  --games 8 --elo 2200 --min-points 4 --concurrency 2 \
   --pgn gauntlet.pgn
 ```
 
-35% vs Elo 1600 is roughly 100–150 points weaker (logistic). Recalibrate `--elo` / `--min-score` after a few hundred local games if the gate is too tight or too loose. PGN from CI is uploaded as the `gauntlet-pgn` artifact.
+4/8 vs Elo 2200 is a 50% score (even). Recalibrate `--elo` / `--min-points` after a few hundred local games if the gate is too tight or too loose. PGN from CI is uploaded as the `gauntlet-pgn` artifact.
 
 ## Perft
 

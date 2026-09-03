@@ -3,6 +3,8 @@
 #include <algorithm>
 #include <chrono>
 #include <cstdint>
+#include <cstdlib>
+#include <cstring>
 #include <utility>
 #include <vector>
 
@@ -27,15 +29,28 @@ double now_seconds() {
 
 enum class TTFlag : std::uint8_t { Exact, Lower, Upper };
 
-struct TTEntry {
+struct alignas(16) TTEntry {
   std::uint64_t key = 0;
   Move move{};
-  int score = 0;
+  std::int16_t score = 0;
   std::int8_t depth = -1;
   TTFlag flag = TTFlag::Exact;
 };
+static_assert(sizeof(TTEntry) == 16, "TT entry should be one quarter of a cache line");
 
 constexpr int kTTSize = 1 << 20;
+
+std::int16_t pack_tt_score(int s) {
+  if (s >= kMateScore - 512) return static_cast<std::int16_t>(32000 - (kMateScore - s));
+  if (s <= -kMateScore + 512) return static_cast<std::int16_t>(-32000 + (kMateScore + s));
+  return static_cast<std::int16_t>(std::clamp(s, -30000, 30000));
+}
+
+int unpack_tt_score(std::int16_t s) {
+  if (s >= 31000) return kMateScore - (32000 - s);
+  if (s <= -31000) return -kMateScore + (32000 + s);
+  return s;
+}
 
 int to_tt(int s, int ply) {
   if (s >= kMateScore - 512) return s + ply;
@@ -64,7 +79,7 @@ struct TranspositionTable {
   bool cutoff(std::uint64_t k, int depth, int ply, int alpha, int beta, int& score) const {
     const TTEntry& e = slot(k);
     if (e.key != k || e.depth < depth) return false;
-    const int s = from_tt(e.score, ply);
+    const int s = from_tt(unpack_tt_score(e.score), ply);
     if (e.flag == TTFlag::Exact) {
       score = s;
       return true;
@@ -85,7 +100,7 @@ struct TranspositionTable {
     if (e.key == k && e.depth > depth) return;
     e.key = k;
     e.depth = static_cast<std::int8_t>(std::clamp(depth, 0, 127));
-    e.score = to_tt(score, ply);
+    e.score = pack_tt_score(to_tt(score, ply));
     e.flag = flag;
     e.move = m;
   }
@@ -378,9 +393,7 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     killers_[p][0] = Move{};
     killers_[p][1] = Move{};
   }
-  for (int i = 0; i < 64; ++i) {
-    for (int j = 0; j < 64; ++j) history_[i][j] = 0;
-  }
+  std::memset(history_, 0, sizeof(history_));
 
   const double start = now_seconds();
   use_deadline_ = limits.max_seconds > 0;
@@ -418,12 +431,20 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     return result;
   }
 
+  int stable_hits = 0;
+  int prev_score = 0;
+  Move prev_best{};
+
   for (int depth = 1; depth <= max_depth; ++depth) {
     if (abort_ || time_up()) break;
-    if (depth > 1 && soft_stop()) break;
-    if (depth > 1 && last_iter > 0 && use_soft_) {
-      const double remaining = soft_deadline_ - now_seconds();
-      if (remaining < last_iter * 1.5) break;
+    if (depth > 1) {
+      const bool unstable = stable_hits < 2;
+      // Stable PV: additional depth is not worth buying. Unstable: spend toward hard.
+      if (!unstable && soft_stop()) break;
+      if (!unstable && last_iter > 0 && use_soft_) {
+        const double remaining = soft_deadline_ - now_seconds();
+        if (remaining < last_iter * 1.5) break;
+      }
     }
 
     const double iter_start = now_seconds();
@@ -465,6 +486,15 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
     if (!finished) break;
     if (iter_score == -kInfScore) break;
 
+    if (completed_depth > 0 && iter_best == prev_best &&
+        std::abs(iter_score - prev_score) < 35) {
+      ++stable_hits;
+    } else {
+      stable_hits = 0;
+    }
+    prev_best = iter_best;
+    prev_score = iter_score;
+
     best = iter_best;
     best_score = iter_score;
     completed_depth = depth;
@@ -479,6 +509,8 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
       }
     }
     if (best_score >= kMateScore - 64) break;
+    if (stable_hits >= 2 && completed_depth >= 4) break;
+    if (stable_hits >= 1 && completed_depth >= 3 && std::abs(best_score) >= 280) break;
   }
 
   result.best_move = best;

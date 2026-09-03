@@ -121,6 +121,7 @@ int king_eg_delta(Piece p, Square sq) {
 
 Board::Board() {
   attacks::init();
+  zobrist::init();
   startpos();
 }
 
@@ -140,8 +141,8 @@ void Board::clear() {
   king_mg_ = 0;
   king_eg_ = 0;
   queens_ = 0;
-  undo_.clear();
-  history_.clear();
+  undo_count_ = 0;
+  hist_count_ = 0;
 }
 
 void Board::put(Square sq, Piece p) {
@@ -151,6 +152,7 @@ void Board::put(Square sq, Piece p) {
     const Bitboard b = bit(i);
     pieces_[piece_index(old)] &= ~b;
     occupancy_[static_cast<int>(color_of(old))] &= ~b;
+    hash_ ^= zobrist::piece(old, sq);
     if (type_of(old) == PieceType::Queen) --queens_;
     if (type_of(old) == PieceType::King) {
       king_mg_ -= king_mg_delta(old, sq);
@@ -164,6 +166,7 @@ void Board::put(Square sq, Piece p) {
   const Bitboard b = bit(i);
   pieces_[piece_index(p)] |= b;
   occupancy_[static_cast<int>(color_of(p))] |= b;
+  hash_ ^= zobrist::piece(p, sq);
   if (p == Piece::WKing) white_king_ = sq;
   if (p == Piece::BKing) black_king_ = sq;
   if (type_of(p) == PieceType::Queen) ++queens_;
@@ -478,9 +481,15 @@ void Board::make(const Move& move) {
   if (us == Color::Black) ++fullmove_;
   stm_ = them;
 
-  rebuild_hash();
-  undo_.push_back(u);
-  history_.push_back(hash_);
+  hash_ ^= zobrist::castle(u.castling);
+  if (u.ep != Square::none_index) hash_ ^= zobrist::en_passant_file(Square(u.ep).file());
+  hash_ ^= zobrist::castle(castling_);
+  if (ep_ != Square::none_index) hash_ ^= zobrist::en_passant_file(Square(ep_).file());
+  hash_ ^= zobrist::side_to_move();
+
+  if (hist_count_ >= kMaxUndo) throw std::logic_error("undo stack overflow");
+  undo_[undo_count_++] = u;
+  history_[hist_count_++] = hash_;
 }
 
 void Board::make_null() {
@@ -501,15 +510,15 @@ void Board::make_null() {
   hash_ ^= zobrist::side_to_move();
   stm_ = opposite(stm_);
 
-  undo_.push_back(u);
-  history_.push_back(hash_);
+  if (hist_count_ >= kMaxUndo) throw std::logic_error("undo stack overflow");
+  undo_[undo_count_++] = u;
+  history_[hist_count_++] = hash_;
 }
 
 void Board::unmake() {
-  if (undo_.empty()) throw std::logic_error("unmake without make");
-  Undo u = undo_.back();
-  undo_.pop_back();
-  history_.pop_back();
+  if (undo_count_ <= 0) throw std::logic_error("unmake without make");
+  Undo u = undo_[--undo_count_];
+  --hist_count_;
 
   stm_ = u.stm;
   castling_ = u.castling;
@@ -556,11 +565,11 @@ void Board::unmake() {
 }
 
 int Board::repetition_count() const {
-  if (history_.empty()) return 1;
-  const std::uint64_t h = history_.back();
+  if (hist_count_ <= 0) return 1;
+  const std::uint64_t h = history_[hist_count_ - 1];
   int n = 0;
-  for (std::uint64_t x : history_) {
-    if (x == h) ++n;
+  for (int i = 0; i < hist_count_; ++i) {
+    if (history_[i] == h) ++n;
   }
   return n;
 }
@@ -646,6 +655,8 @@ std::string Board::to_string(bool unicode) const {
 }
 
 Board Board::from_fen(std::string_view fen) {
+  attacks::init();
+  zobrist::init();
   Board b{EmptyTag{}};
 
   std::string s(fen);
@@ -700,7 +711,8 @@ Board Board::from_fen(std::string_view fen) {
   b.fullmove_ = full.empty() ? 1 : std::stoi(full);
   b.find_kings();
   b.rebuild_hash();
-  b.history_.push_back(b.hash_);
+  b.hist_count_ = 1;
+  b.history_[0] = b.hash_;
   return b;
 }
 

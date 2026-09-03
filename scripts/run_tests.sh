@@ -44,7 +44,7 @@ if command -v uv >/dev/null 2>&1; then
   echo "==> uv sync"
   uv sync --group dev
   echo "==> ruff"
-  uv run ruff check bot tests
+  uv run ruff check bot tests scripts
   echo "==> python unittest"
   PYTHONPATH="$BUILD_DIR:$ROOT/bot${PYTHONPATH:+:$PYTHONPATH}" uv run python -m unittest discover -s tests -p 'test_*.py' -v
 else

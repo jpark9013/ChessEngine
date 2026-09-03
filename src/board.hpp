@@ -11,6 +11,8 @@
 
 namespace chess {
 
+enum class MoveGen : std::uint8_t { All, Captures, Quiets };
+
 struct Undo {
   Move move{};
   Piece captured = Piece::None;
@@ -46,6 +48,7 @@ class Board {
   void startpos();
 
   void make(const Move& move);
+  void make_null();
   void unmake();
 
   bool is_attacked(Square sq, Color by) const;
@@ -55,6 +58,8 @@ class Board {
   MoveList legal_moves();
   MoveList legal_captures();
   MoveList pseudo_legal_moves() const;
+  void generate_pseudo(MoveList& out, MoveGen gen) const;
+  bool has_non_pawn_material(Color c) const;
 
   bool is_legal(const Move& move);
   bool gives_check(const Move& move);
@@ -81,8 +86,7 @@ class Board {
   void remove(Square sq);
   void rebuild_hash();
   void find_kings();
-  void generate_pseudo(MoveList& out, bool captures_only) const;
-  void add_pawn_moves(MoveList& out, Square from, bool captures_only) const;
+  void add_pawn_moves(MoveList& out, Square from, MoveGen gen) const;
   bool can_castle(Color c, bool kingside) const;
   Bitboard piece_bb(Color c, PieceType t) const;
   Bitboard occupancy() const { return occupancy_[0] | occupancy_[1]; }
@@ -98,6 +102,10 @@ class Board {
   std::uint64_t hash_ = 0;
   Square white_king_{0, 4};
   Square black_king_{7, 4};
+  int eval_noking_ = 0;
+  int king_mg_ = 0;
+  int king_eg_ = 0;
+  int queens_ = 0;
   std::vector<Undo> undo_;
   std::vector<std::uint64_t> history_;
 };

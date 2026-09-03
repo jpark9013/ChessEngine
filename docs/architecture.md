@@ -11,7 +11,7 @@ The library is a hybrid bitboard engine: 12 piece bitboards plus occupancy for g
 | `src/attacks.cpp` | Pawn/knight/king tables; occupancy-masked slider rays |
 | `src/zobrist.cpp` | Deterministic 64-bit keys for pieces, side, castling, en passant file |
 | `src/board.cpp` | Position, FEN, attacks, move gen, make/unmake, SAN/UCI, eval, game status |
-| `src/search.cpp` | Minimax, alpha-beta, quiescence |
+| `src/search.cpp` | Iterative deepening, TT, null-move, LMR, PVS, killers/history |
 | `src/perft.cpp` | Recursive legal-move node counts |
 | `src/python_module.cpp` | pybind11 module `chessengine` |
 
@@ -60,19 +60,25 @@ Promotions emit four moves (Q, R, B, N), including capturing promotions.
 
 ## Evaluation
 
-White-centric centipawns: material + piece-square tables from the [simplified evaluation function](https://www.chessprogramming.org/Simplified_Evaluation_Function). King tables switch to the endgame table when there are no queens. `evaluate()` returns that score from the side to move (so negamax can negate).
+White-centric centipawns: material + piece-square tables from the [simplified evaluation function](https://www.chessprogramming.org/Simplified_Evaluation_Function). King tables switch to the endgame table when there are no queens. `put` / `remove` keep this score incrementally so search does not walk the board at every leaf. `evaluate()` returns that score from the side to move (so negamax can negate).
 
 ## Search
 
-Root search tries every legal move, then calls:
+Root search is **iterative deepening**: it completes depth 1, then 2, … up to `limits.depth`. The last fully finished iteration is the result. A single legal move is returned without searching.
 
-- **Minimax** — full tree, no pruning
-- **Alpha-beta** — fail-soft negamax with MVV-LVA ordering
-- **Alpha-beta + quiescence** — at depth 0, stand pat and search legal captures (all legal moves if in check)
+Each iteration tries every legal move with PVS, then calls:
 
-Mate is `100000 - ply` so shorter mates score higher. Draw by 50-move or repetition returns 0 inside the tree. Time limits are optional; the search still unmakes before returning.
+- **Minimax** — full tree, no pruning (debug / CLI)
+- **Alpha-beta** — fail-soft negamax with a transposition table, hash-move / MVV-LVA / killer / history ordering, null-move pruning, LMR, reverse futility, and quiet futility
+- **Alpha-beta + quiescence** — at depth 0, stand pat and search captures (all moves if in check), capped at ply 18
 
-There is no transposition table and no iterative deepening yet. Those are the next strength upgrades once you want them.
+Interior nodes generate **captures first**, then quiets only if there is no cutoff. Moves are tried with make/unmake; those that leave the king in check are skipped.
+
+`max_seconds` is a hard abort (checked every 256 nodes). `target_seconds` is a soft stop: do not start the next iteration if the target is gone or the last iteration would not fit (~1.5×). If `target_seconds` is 0 and a hard cap is set, the soft bound is 70% of the hard cap.
+
+Mate is `100000 - ply` so shorter mates score higher. Draw by 50-move or repetition returns 0 inside the tree. The search always unmakes before returning.
+
+The transposition table is process-lifetime (~1M entries). Killers and history reset at the start of each root search.
 
 ## Hash
 

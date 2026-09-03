@@ -23,6 +23,100 @@ int castle_mask_lost_on_square(Square sq) {
   return mask;
 }
 
+constexpr int kPieceValue[] = {0, 100, 320, 330, 500, 900, 0};
+
+// Piece-square tables stored a1..h8, white's perspective.
+constexpr int kPst[7][64] = {
+    {0},
+    {0,  0,  0,  0,  0,  0,  0,  0,
+     5, 10, 10,-20,-20, 10, 10,  5,
+     5, -5,-10,  0,  0,-10, -5,  5,
+     0,  0,  0, 20, 20,  0,  0,  0,
+     5,  5, 10, 25, 25, 10,  5,  5,
+    10, 10, 20, 30, 30, 20, 10, 10,
+    50, 50, 50, 50, 50, 50, 50, 50,
+     0,  0,  0,  0,  0,  0,  0,  0},
+    {-50,-40,-30,-30,-30,-30,-40,-50,
+     -40,-20,  0,  0,  0,  0,-20,-40,
+     -30,  0, 10, 15, 15, 10,  0,-30,
+     -30,  5, 15, 20, 20, 15,  5,-30,
+     -30,  0, 15, 20, 20, 15,  0,-30,
+     -30,  5, 10, 15, 15, 10,  5,-30,
+     -40,-20,  0,  5,  5,  0,-20,-40,
+     -50,-40,-30,-30,-30,-30,-40,-50},
+    {-20,-10,-10,-10,-10,-10,-10,-20,
+     -10,  5,  0,  0,  0,  0,  5,-10,
+     -10, 10, 10, 10, 10, 10, 10,-10,
+     -10,  0, 10, 10, 10, 10,  0,-10,
+     -10,  5,  5, 10, 10,  5,  5,-10,
+     -10,  0,  5, 10, 10,  5,  0,-10,
+     -10,  0,  0,  0,  0,  0,  0,-10,
+     -20,-10,-10,-10,-10,-10,-10,-20},
+    {0,  0,  0,  5,  5,  0,  0,  0,
+    -5,  0,  0,  0,  0,  0,  0, -5,
+    -5,  0,  0,  0,  0,  0,  0, -5,
+    -5,  0,  0,  0,  0,  0,  0, -5,
+    -5,  0,  0,  0,  0,  0,  0, -5,
+    -5,  0,  0,  0,  0,  0,  0, -5,
+     5, 10, 10, 10, 10, 10, 10,  5,
+     0,  0,  0,  0,  0,  0,  0,  0},
+    {-20,-10,-10, -5, -5,-10,-10,-20,
+     -10,  0,  5,  0,  0,  0,  0,-10,
+     -10,  5,  5,  5,  5,  5,  0,-10,
+       0,  0,  5,  5,  5,  5,  0, -5,
+      -5,  0,  5,  5,  5,  5,  0, -5,
+     -10,  0,  5,  5,  5,  5,  0,-10,
+     -10,  0,  0,  0,  0,  0,  0,-10,
+     -20,-10,-10, -5, -5,-10,-10,-20},
+    {20, 30, 10,  0,  0, 10, 30, 20,
+     20, 20,  0,  0,  0,  0, 20, 20,
+    -10,-20,-20,-20,-20,-20,-20,-10,
+    -20,-30,-30,-40,-40,-30,-30,-20,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30,
+    -30,-40,-40,-50,-50,-40,-40,-30}
+};
+
+constexpr int kKingEndgame[64] = {
+    -50,-30,-30,-30,-30,-30,-30,-50,
+    -30,-30,  0,  0,  0,  0,-30,-30,
+    -30,-10, 20, 30, 30, 20,-10,-30,
+    -30,-10, 30, 40, 40, 30,-10,-30,
+    -30,-10, 30, 40, 40, 30,-10,-30,
+    -30,-10, 20, 30, 30, 20,-10,-30,
+    -30,-20,-10,  0,  0,-10,-20,-30,
+    -50,-40,-30,-20,-20,-30,-40,-50
+};
+
+int pst_index(Color c, Square sq) {
+  return c == Color::White ? sq.index() : (sq.index() ^ 56);
+}
+
+int eval_delta(Piece p, Square sq) {
+  if (p == Piece::None) return 0;
+  const Color c = color_of(p);
+  const PieceType t = type_of(p);
+  const int idx = pst_index(c, sq);
+  int val = kPieceValue[static_cast<int>(t)];
+  if (t != PieceType::King) val += kPst[static_cast<int>(t)][idx];
+  return c == Color::White ? val : -val;
+}
+
+int king_mg_delta(Piece p, Square sq) {
+  if (type_of(p) != PieceType::King) return 0;
+  const int idx = pst_index(color_of(p), sq);
+  const int val = kPst[6][idx];
+  return color_of(p) == Color::White ? val : -val;
+}
+
+int king_eg_delta(Piece p, Square sq) {
+  if (type_of(p) != PieceType::King) return 0;
+  const int idx = pst_index(color_of(p), sq);
+  const int val = kKingEndgame[idx];
+  return color_of(p) == Color::White ? val : -val;
+}
+
 }  // namespace
 
 Board::Board() {
@@ -42,6 +136,10 @@ void Board::clear() {
   hash_ = 0;
   white_king_ = Square();
   black_king_ = Square();
+  eval_noking_ = 0;
+  king_mg_ = 0;
+  king_eg_ = 0;
+  queens_ = 0;
   undo_.clear();
   history_.clear();
 }
@@ -53,6 +151,13 @@ void Board::put(Square sq, Piece p) {
     const Bitboard b = bit(i);
     pieces_[piece_index(old)] &= ~b;
     occupancy_[static_cast<int>(color_of(old))] &= ~b;
+    if (type_of(old) == PieceType::Queen) --queens_;
+    if (type_of(old) == PieceType::King) {
+      king_mg_ -= king_mg_delta(old, sq);
+      king_eg_ -= king_eg_delta(old, sq);
+    } else {
+      eval_noking_ -= eval_delta(old, sq);
+    }
   }
   squares_[i] = p;
   if (p == Piece::None) return;
@@ -61,6 +166,13 @@ void Board::put(Square sq, Piece p) {
   occupancy_[static_cast<int>(color_of(p))] |= b;
   if (p == Piece::WKing) white_king_ = sq;
   if (p == Piece::BKing) black_king_ = sq;
+  if (type_of(p) == PieceType::Queen) ++queens_;
+  if (type_of(p) == PieceType::King) {
+    king_mg_ += king_mg_delta(p, sq);
+    king_eg_ += king_eg_delta(p, sq);
+  } else {
+    eval_noking_ += eval_delta(p, sq);
+  }
 }
 
 void Board::remove(Square sq) { put(sq, Piece::None); }
@@ -137,12 +249,14 @@ bool Board::can_castle(Color c, bool kingside) const {
   return true;
 }
 
-void Board::add_pawn_moves(MoveList& out, Square from, bool captures_only) const {
+void Board::add_pawn_moves(MoveList& out, Square from, MoveGen gen) const {
   const Color us = stm_;
   const int dir = (us == Color::White) ? 1 : -1;
   const int start_rank = (us == Color::White) ? 1 : 6;
   const int promo_rank = (us == Color::White) ? 7 : 0;
   const Color them = opposite(us);
+  const bool want_quiet = gen != MoveGen::Captures;
+  const bool want_cap = gen != MoveGen::Quiets;
 
   auto add_promo_or_quiet = [&](Square to, MoveFlag flag, bool is_capture) {
     if (to.rank() == promo_rank) {
@@ -150,7 +264,7 @@ void Board::add_pawn_moves(MoveList& out, Square from, bool captures_only) const
       out.push(Move::make(from, to, MoveFlag::Promotion, PieceType::Rook));
       out.push(Move::make(from, to, MoveFlag::Promotion, PieceType::Bishop));
       out.push(Move::make(from, to, MoveFlag::Promotion, PieceType::Knight));
-    } else if (!captures_only || is_capture) {
+    } else if ((want_quiet && !is_capture) || (want_cap && is_capture)) {
       out.push(Move::make(from, to, flag));
     }
   };
@@ -158,7 +272,7 @@ void Board::add_pawn_moves(MoveList& out, Square from, bool captures_only) const
   const int r = from.rank();
   const int f = from.file();
 
-  if (!captures_only) {
+  if (want_quiet) {
     const int r1 = r + dir;
     if (on_board(r1, f) && piece_at(Square(r1, f)) == Piece::None) {
       add_promo_or_quiet(Square(r1, f), MoveFlag::Normal, false);
@@ -168,6 +282,8 @@ void Board::add_pawn_moves(MoveList& out, Square from, bool captures_only) const
       }
     }
   }
+
+  if (!want_cap) return;
 
   for (int df : {-1, 1}) {
     const int nr = r + dir;
@@ -183,15 +299,15 @@ void Board::add_pawn_moves(MoveList& out, Square from, bool captures_only) const
   }
 }
 
-void Board::generate_pseudo(MoveList& out, bool captures_only) const {
+void Board::generate_pseudo(MoveList& out, MoveGen gen) const {
   const Color us = stm_;
-  const Color them = opposite(us);
   const Bitboard us_occ = occupancy_[static_cast<int>(us)];
-  const Bitboard them_occ = occupancy_[static_cast<int>(them)];
+  const Bitboard them_occ = occupancy_[static_cast<int>(opposite(us))];
   const Bitboard occ = us_occ | them_occ;
 
   auto emit = [&](int from, Bitboard dests) {
-    if (captures_only) dests &= them_occ;
+    if (gen == MoveGen::Captures) dests &= them_occ;
+    else if (gen == MoveGen::Quiets) dests &= ~occ;
     else dests &= ~us_occ;
     while (dests) {
       const int to = pop_lsb(dests);
@@ -200,7 +316,7 @@ void Board::generate_pseudo(MoveList& out, bool captures_only) const {
   };
 
   Bitboard pawns = piece_bb(us, PieceType::Pawn);
-  while (pawns) add_pawn_moves(out, Square(pop_lsb(pawns)), captures_only);
+  while (pawns) add_pawn_moves(out, Square(pop_lsb(pawns)), gen);
 
   Bitboard knights = piece_bb(us, PieceType::Knight);
   while (knights) {
@@ -232,7 +348,7 @@ void Board::generate_pseudo(MoveList& out, bool captures_only) const {
     emit(from, attacks::king(from));
   }
 
-  if (!captures_only) {
+  if (gen != MoveGen::Captures) {
     if (can_castle(us, true)) {
       const int rank = (us == Color::White) ? 0 : 7;
       out.push(Move::make(Square(rank, 4), Square(rank, 6), MoveFlag::CastleKingside));
@@ -246,13 +362,13 @@ void Board::generate_pseudo(MoveList& out, bool captures_only) const {
 
 MoveList Board::pseudo_legal_moves() const {
   MoveList out;
-  generate_pseudo(out, false);
+  generate_pseudo(out, MoveGen::All);
   return out;
 }
 
 MoveList Board::legal_moves() {
   MoveList pseudo, legal;
-  generate_pseudo(pseudo, false);
+  generate_pseudo(pseudo, MoveGen::All);
   const Color us = stm_;
   for (const Move& m : pseudo) {
     make(m);
@@ -265,7 +381,7 @@ MoveList Board::legal_moves() {
 
 MoveList Board::legal_captures() {
   MoveList pseudo, legal;
-  generate_pseudo(pseudo, true);
+  generate_pseudo(pseudo, MoveGen::Captures);
   const Color us = stm_;
   for (const Move& m : pseudo) {
     make(m);
@@ -274,6 +390,11 @@ MoveList Board::legal_captures() {
     if (ok) legal.push(m);
   }
   return legal;
+}
+
+bool Board::has_non_pawn_material(Color c) const {
+  return (piece_bb(c, PieceType::Knight) | piece_bb(c, PieceType::Bishop) |
+          piece_bb(c, PieceType::Rook) | piece_bb(c, PieceType::Queen)) != 0;
 }
 
 bool Board::is_legal(const Move& move) {
@@ -362,6 +483,28 @@ void Board::make(const Move& move) {
   history_.push_back(hash_);
 }
 
+void Board::make_null() {
+  Undo u;
+  u.move = Move{};
+  u.captured = Piece::None;
+  u.castling = castling_;
+  u.ep = ep_;
+  u.halfmove = halfmove_;
+  u.fullmove = fullmove_;
+  u.hash = hash_;
+  u.white_king = white_king_;
+  u.black_king = black_king_;
+  u.stm = stm_;
+
+  if (ep_ != Square::none_index) hash_ ^= zobrist::en_passant_file(Square(ep_).file());
+  ep_ = Square::none_index;
+  hash_ ^= zobrist::side_to_move();
+  stm_ = opposite(stm_);
+
+  undo_.push_back(u);
+  history_.push_back(hash_);
+}
+
 void Board::unmake() {
   if (undo_.empty()) throw std::logic_error("unmake without make");
   Undo u = undo_.back();
@@ -376,6 +519,8 @@ void Board::unmake() {
   hash_ = u.hash;
   white_king_ = u.white_king;
   black_king_ = u.black_king;
+
+  if (u.move.is_null()) return;
 
   const Move& move = u.move;
   if (move.flag == MoveFlag::CastleKingside) {
@@ -474,109 +619,8 @@ GameStatus Board::status() {
   return s;
 }
 
-// Piece-square tables stored a1..h8, white's perspective.
-namespace {
-
-constexpr int kPieceValue[] = {0, 100, 320, 330, 500, 900, 0};
-
-constexpr int kPst[7][64] = {
-    {0},
-    // Pawn
-    {0,  0,  0,  0,  0,  0,  0,  0,
-     5, 10, 10,-20,-20, 10, 10,  5,
-     5, -5,-10,  0,  0,-10, -5,  5,
-     0,  0,  0, 20, 20,  0,  0,  0,
-     5,  5, 10, 25, 25, 10,  5,  5,
-    10, 10, 20, 30, 30, 20, 10, 10,
-    50, 50, 50, 50, 50, 50, 50, 50,
-     0,  0,  0,  0,  0,  0,  0,  0},
-    // Knight
-    {-50,-40,-30,-30,-30,-30,-40,-50,
-     -40,-20,  0,  0,  0,  0,-20,-40,
-     -30,  0, 10, 15, 15, 10,  0,-30,
-     -30,  5, 15, 20, 20, 15,  5,-30,
-     -30,  0, 15, 20, 20, 15,  0,-30,
-     -30,  5, 10, 15, 15, 10,  5,-30,
-     -40,-20,  0,  5,  5,  0,-20,-40,
-     -50,-40,-30,-30,-30,-30,-40,-50},
-    // Bishop
-    {-20,-10,-10,-10,-10,-10,-10,-20,
-     -10,  5,  0,  0,  0,  0,  5,-10,
-     -10, 10, 10, 10, 10, 10, 10,-10,
-     -10,  0, 10, 10, 10, 10,  0,-10,
-     -10,  5,  5, 10, 10,  5,  5,-10,
-     -10,  0,  5, 10, 10,  5,  0,-10,
-     -10,  0,  0,  0,  0,  0,  0,-10,
-     -20,-10,-10,-10,-10,-10,-10,-20},
-    // Rook
-    {0,  0,  0,  5,  5,  0,  0,  0,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-    -5,  0,  0,  0,  0,  0,  0, -5,
-     5, 10, 10, 10, 10, 10, 10,  5,
-     0,  0,  0,  0,  0,  0,  0,  0},
-    // Queen
-    {-20,-10,-10, -5, -5,-10,-10,-20,
-     -10,  0,  5,  0,  0,  0,  0,-10,
-     -10,  5,  5,  5,  5,  5,  0,-10,
-       0,  0,  5,  5,  5,  5,  0, -5,
-      -5,  0,  5,  5,  5,  5,  0, -5,
-     -10,  0,  5,  5,  5,  5,  0,-10,
-     -10,  0,  0,  0,  0,  0,  0,-10,
-     -20,-10,-10, -5, -5,-10,-10,-20},
-    // King middlegame
-    {20, 30, 10,  0,  0, 10, 30, 20,
-     20, 20,  0,  0,  0,  0, 20, 20,
-    -10,-20,-20,-20,-20,-20,-20,-10,
-    -20,-30,-30,-40,-40,-30,-30,-20,
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -30,-40,-40,-50,-50,-40,-40,-30,
-    -30,-40,-40,-50,-50,-40,-40,-30}
-};
-
-constexpr int kKingEndgame[64] = {
-    -50,-30,-30,-30,-30,-30,-30,-50,
-    -30,-30,  0,  0,  0,  0,-30,-30,
-    -30,-10, 20, 30, 30, 20,-10,-30,
-    -30,-10, 30, 40, 40, 30,-10,-30,
-    -30,-10, 30, 40, 40, 30,-10,-30,
-    -30,-10, 20, 30, 30, 20,-10,-30,
-    -30,-20,-10,  0,  0,-10,-20,-30,
-    -50,-40,-30,-20,-20,-30,-40,-50
-};
-
-int pst_index(Color c, Square sq) {
-  return c == Color::White ? sq.index() : (sq.index() ^ 56);
-}
-
-}  // namespace
-
 int Board::evaluate_white() const {
-  int queens = 0;
-  for (int i = 0; i < 64; ++i) {
-    if (type_of(squares_[i]) == PieceType::Queen) ++queens;
-  }
-  const bool endgame = queens == 0;
-
-  int score = 0;
-  for (int i = 0; i < 64; ++i) {
-    Piece p = squares_[i];
-    if (p == Piece::None) continue;
-    Color c = color_of(p);
-    PieceType t = type_of(p);
-    int idx = pst_index(c, Square(i));
-    int val = kPieceValue[static_cast<int>(t)];
-    if (t == PieceType::King) {
-      val += endgame ? kKingEndgame[idx] : kPst[6][idx];
-    } else {
-      val += kPst[static_cast<int>(t)][idx];
-    }
-    score += (c == Color::White) ? val : -val;
-  }
-  return score;
+  return eval_noking_ + (queens_ == 0 ? king_eg_ : king_mg_);
 }
 
 int Board::evaluate() const {

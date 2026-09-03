@@ -87,15 +87,16 @@ FEN must include at least placement, side, castling, and en passant. Halfmove an
 
 ```cpp
 SearchLimits limits;
-limits.depth = 5;
+limits.depth = 5;                               // max ply (iterative deepening 1..depth)
 limits.mode = SearchMode::AlphaBetaQuiescence;  // or Minimax, AlphaBeta
-limits.max_seconds = 0;                         // 0 = no cap
+limits.max_seconds = 0;                         // hard abort; 0 = no cap
+limits.target_seconds = 0;                      // soft stop; 0 = 70% of max if max is set
 
 SearchResult r = search(board, limits);
 // r.best_move, r.score, r.depth, r.nodes, r.seconds
 ```
 
-Score is from the side to move at the root, in centipawns. Mate scores are near `±100000`. The board is left unchanged.
+`r.depth` is the last **completed** iteration. Score is from the side to move at the root, in centipawns. Mate scores are near `±100000`. The board is left unchanged.
 
 ## Perft
 

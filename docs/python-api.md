@@ -77,9 +77,12 @@ result = board.search(
     depth=5,
     mode=ce.SearchMode.ALPHABETA_QUIESCENCE,
     max_seconds=1.0,
+    target_seconds=0.7,
 )
 print(result.best_move, result.score, result.nodes, result.seconds)
 ```
+
+Search uses iterative deepening up to `depth`. `max_seconds` aborts the tree; `target_seconds` stops starting new iterations (default: 70% of `max_seconds` when that is set).
 
 `SearchMode.MINIMAX`, `ALPHABETA`, and `ALPHABETA_QUIESCENCE` match the C++ enum.
 

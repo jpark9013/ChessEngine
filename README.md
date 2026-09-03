@@ -105,8 +105,8 @@ See [docs/cpp-api.md](docs/cpp-api.md) and [docs/architecture.md](docs/architect
 
 ## Lichess bot
 
-[docs/bot.md](docs/bot.md) — homemade adapter in `bot/`, always-on Fly worker (`fly.toml`, 2 GB). CI runs tests on every branch and deploys from `master` when `FLY_API_TOKEN` is set.
+[docs/bot.md](docs/bot.md) — homemade adapter in `bot/`, always-on Fly worker (`fly.toml`, 2 GB). The live bot only plays bullet with base ≤ 120s (1+0, 2+1, …). CI runs tests on every branch, a Stockfish Elo-1600 gauntlet, and deploys from `main` when `FLY_API_TOKEN` is set and the gauntlet scores ≥ 35%.
 
 ## What this engine is not
 
-Hybrid bitboards, no transposition table, no opening book, no NNUE. Strength is a shallow classical engine: good enough to play and to test rules, not a competitor to Stockfish.
+Hybrid bitboards, no opening book, no NNUE. Strength is a shallow classical engine with iterative deepening, a transposition table, and standard reductions: good enough to play bullet, not a competitor to Stockfish.

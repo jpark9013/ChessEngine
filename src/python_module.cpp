@@ -95,6 +95,7 @@ PYBIND11_MODULE(chessengine, m) {
       .def(py::init<>())
       .def_readwrite("depth", &chess::SearchLimits::depth)
       .def_readwrite("max_seconds", &chess::SearchLimits::max_seconds)
+      .def_readwrite("target_seconds", &chess::SearchLimits::target_seconds)
       .def_readwrite("mode", &chess::SearchLimits::mode);
 
   py::class_<chess::SearchResult>(m, "SearchResult")
@@ -141,32 +142,38 @@ PYBIND11_MODULE(chessengine, m) {
       .def("evaluate", &chess::Board::evaluate)
       .def("evaluate_white", &chess::Board::evaluate_white)
       .def("perft", [](chess::Board& b, int depth) { return chess::perft(b, depth); })
-      .def("search", [](chess::Board& b, int depth, chess::SearchMode mode, double seconds) {
+      .def("search", [](chess::Board& b, int depth, chess::SearchMode mode,
+                        double seconds, double target) {
             chess::SearchLimits lim;
             lim.depth = depth;
             lim.mode = mode;
             lim.max_seconds = seconds;
+            lim.target_seconds = target;
             return chess::search(b, lim);
           },
           py::arg("depth") = 4,
           py::arg("mode") = chess::SearchMode::AlphaBetaQuiescence,
-          py::arg("max_seconds") = 0.0)
+          py::arg("max_seconds") = 0.0,
+          py::arg("target_seconds") = 0.0)
       .def("copy", [](const chess::Board& b) { return b; })
       .def("__str__", [](const chess::Board& b) { return b.to_string(false); })
       .def("__repr__", [](const chess::Board& b) { return "Board('" + b.fen() + "')"; });
 
   m.def("perft", &chess::perft);
-  m.def("search", [](chess::Board& b, int depth, chess::SearchMode mode, double seconds) {
+  m.def("search", [](chess::Board& b, int depth, chess::SearchMode mode,
+                     double seconds, double target) {
           chess::SearchLimits lim;
           lim.depth = depth;
           lim.mode = mode;
           lim.max_seconds = seconds;
+          lim.target_seconds = target;
           return chess::search(b, lim);
         },
         py::arg("board"),
         py::arg("depth") = 4,
         py::arg("mode") = chess::SearchMode::AlphaBetaQuiescence,
-        py::arg("max_seconds") = 0.0);
+        py::arg("max_seconds") = 0.0,
+        py::arg("target_seconds") = 0.0);
   m.def("opposite", &chess::opposite);
   m.def("make_piece", &chess::make_piece);
   m.def("color_of", &chess::color_of);

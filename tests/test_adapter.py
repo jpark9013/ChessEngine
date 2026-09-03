@@ -39,14 +39,29 @@ class TestAdapter(unittest.TestCase):
         self.assertNotEqual(result["uci"], "0000")
 
     def test_time_allocator(self) -> None:
-        self.assertGreaterEqual(allocate_time(None, None, 1.0), 0.05)
-        self.assertLessEqual(allocate_time(None, None, 1.0), 0.9)
-        self.assertLessEqual(allocate_time(5.0, 0.0, None), 3.0)
-        self.assertLessEqual(allocate_time(300.0, 5.0, None), 8.0)
+        sudden = allocate_time(None, None, 1.0)
+        self.assertGreaterEqual(sudden.hard, 0.04)
+        self.assertLessEqual(sudden.hard, 0.95)
+        self.assertLessEqual(sudden.target, sudden.hard)
+
+        low = allocate_time(5.0, 0.0, None)
+        self.assertLessEqual(low.hard, 0.6)
+        self.assertLessEqual(low.target, low.hard)
+
+        full_bullet = allocate_time(60.0, 0.0, None)
+        self.assertLessEqual(full_bullet.target, 2.6)
+        self.assertLessEqual(full_bullet.hard, 4.1)
+        self.assertGreater(full_bullet.max_depth, 8)
+
+        panic = allocate_time(0.3, 0.0, None)
+        self.assertLessEqual(panic.hard, 0.12)
+        self.assertEqual(panic.max_depth, 1)
 
     def test_depth_allocator(self) -> None:
-        self.assertEqual(choose_depth(5.0, 4), 3)
-        self.assertEqual(choose_depth(60.0, 4), 4)
+        self.assertEqual(choose_depth(0.3, None), 1)
+        self.assertEqual(choose_depth(5.0, 4), 4)
+        self.assertEqual(choose_depth(60.0, None), 24)
+        self.assertEqual(choose_depth(60.0, 6), 6)
 
 
 if __name__ == "__main__":

@@ -28,15 +28,16 @@ class ChessEngine(ExampleEngine):
         else:
             our, inc = time_limit.black_clock, time_limit.black_inc
 
-        max_seconds = allocate_time(our, inc, time_limit.time)
-        depth = choose_depth(our, time_limit.depth)
+        budget = allocate_time(our, inc, time_limit.time)
+        depth = min(choose_depth(our, time_limit.depth), budget.max_depth)
         roots = None
         if isinstance(root_moves, list):
             roots = [move.uci() for move in root_moves]
 
         result = search_position(
             board.fen(),
-            max_seconds=max_seconds,
+            max_seconds=budget.hard,
+            target_seconds=budget.target,
             depth=depth,
             root_moves=roots,
         )

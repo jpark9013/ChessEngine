@@ -308,14 +308,42 @@ TEST(Board, SanDisambiguation) {
   EXPECT_EQ(n3.to_san(n3.parse_uci("e3d5")), "Ned5");
 }
 
-TEST(Board, EvalIsWhitePositiveAndFlipsBySide) {
+TEST(Board, IncrementalEvalSurvivesMakeUnmake) {
   Board b;
-  EXPECT_EQ(b.evaluate_white(), 0);
-  EXPECT_EQ(b.evaluate(), 0);
+  const int start = b.evaluate_white();
+  EXPECT_EQ(start, 0);
   b.make(b.parse_uci("e2e4"));
-  const int w = b.evaluate_white();
-  EXPECT_GT(w, 0);
-  EXPECT_EQ(b.evaluate(), -w);
+  const int after = b.evaluate_white();
+  EXPECT_GT(after, start);
+  EXPECT_EQ(b.evaluate(), -after);
+  b.make(b.parse_uci("e7e5"));
+  b.unmake();
+  EXPECT_EQ(b.evaluate_white(), after);
+  b.unmake();
+  EXPECT_EQ(b.evaluate_white(), start);
+  EXPECT_EQ(b.evaluate(), 0);
+}
+
+TEST(Board, NullMoveRestoresPosition) {
+  Board b;
+  const std::string fen = b.fen();
+  const int eval = b.evaluate_white();
+  b.make_null();
+  EXPECT_EQ(b.side_to_move(), Color::Black);
+  EXPECT_EQ(b.evaluate_white(), eval);
+  b.unmake();
+  EXPECT_EQ(b.fen(), fen);
+  EXPECT_EQ(b.evaluate_white(), eval);
+}
+
+TEST(Board, CapturesThenQuietsMatchAllPseudo) {
+  Board b;
+  MoveList all, caps, quiets;
+  b.generate_pseudo(all, MoveGen::All);
+  b.generate_pseudo(caps, MoveGen::Captures);
+  b.generate_pseudo(quiets, MoveGen::Quiets);
+  EXPECT_EQ(caps.size() + quiets.size(), all.size());
+  EXPECT_EQ(all.size(), 20);
 }
 
 TEST(Search, FindsMateInOne) {
@@ -344,4 +372,24 @@ TEST(Search, PrefersCapturingHangingQueen) {
   Board b = Board::from_fen("4k3/8/8/8/8/8/8/3qK3 w - - 0 1");
   auto r = search(b, SearchLimits{2, 0.0, SearchMode::AlphaBeta});
   EXPECT_EQ(r.best_move.to, Square::from_algebraic("d1"));
+}
+
+TEST(Search, OneLegalMoveSkipsSearch) {
+  Board b = Board::from_fen("k7/2K5/8/8/8/8/8/8 b - - 0 1");
+  auto r = search(b, SearchLimits{8, 0.0, SearchMode::AlphaBetaQuiescence});
+  EXPECT_EQ(r.best_move.uci(), "a8a7");
+  EXPECT_EQ(r.depth, 0);
+}
+
+TEST(Search, TimeBudgetDoesNotOverrunHardLimit) {
+  Board b;
+  SearchLimits lim;
+  lim.depth = 24;
+  lim.max_seconds = 0.08;
+  lim.target_seconds = 0.05;
+  lim.mode = SearchMode::AlphaBetaQuiescence;
+  auto r = search(b, lim);
+  EXPECT_FALSE(r.best_move.is_null());
+  EXPECT_GE(r.depth, 1);
+  EXPECT_LT(r.seconds, 0.40);
 }

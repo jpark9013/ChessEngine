@@ -2,6 +2,8 @@
 
 The worker is [lichess-bot](https://github.com/lichess-bot-devs/lichess-bot) plus our homemade engine. We do not call berserk or the Lichess HTTP API ourselves.
 
+The bot only accepts **bullet with base ≤ 120s** (1+0, 2+1, 1+1, 30+0, ½+0). Lichess does not allow bots to play ultraBullet. Blitz/rapid/classical are refused. Search is iterative deepening with a bullet clock: a soft target (~clock/30, capped at 2.5s) and a hard abort (≤ 4s, much less when flagging). Concurrency is 1 so one game owns the CPU. `move_overhead` is 350ms.
+
 `bot/engine.py` is the contract: FEN in, UCI out. `bot/homemade.py` is the class lichess-bot loads (`engine.name: ChessEngine`).
 
 ## Local

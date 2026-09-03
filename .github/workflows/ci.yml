@@ -38,7 +38,7 @@ jobs:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
       - name: ruff
-        run: uv sync --group dev && uv run ruff check bot tests
+        run: uv sync --group dev && uv run ruff check bot tests scripts
 
   python-test:
     runs-on: ubuntu-latest
@@ -56,9 +56,58 @@ jobs:
       - name: unittest
         run: uv sync --group dev && PYTHONPATH=build:bot uv run python -m unittest discover -s tests -p 'test_*.py' -v
 
+  strength:
+    needs: [cpp-test, python-test]
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake g++ python3-dev
+      - name: Install Stockfish 17.1
+        run: |
+          curl -fsSL -o /tmp/sf.tar \
+            https://github.com/official-stockfish/Stockfish/releases/download/sf_17.1/stockfish-ubuntu-x86-64-avx2.tar
+          mkdir -p "$HOME/sf"
+          tar -xf /tmp/sf.tar -C "$HOME/sf"
+          BIN="$(find "$HOME/sf" -type f \( -name 'stockfish' -o -name 'stockfish-*' \) ! -name '*.md' | head -n 1)"
+          test -n "$BIN" && test -f "$BIN"
+          chmod +x "$BIN"
+          mkdir -p "$HOME/.local/bin"
+          ln -sf "$BIN" "$HOME/.local/bin/stockfish"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
+          "$HOME/.local/bin/stockfish" <<< "uci" | head -n 5
+      - name: Build chessengine module
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCHESS_BUILD_TESTS=OFF -DCHESS_BUILD_PYTHON=ON \
+            -DPython_EXECUTABLE="$(uv python find)"
+          cmake --build build -j
+      - name: Gauntlet vs Stockfish
+        env:
+          GAUNTLET_GAMES: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && '40' || '8' }}
+          GAUNTLET_MIN_SCORE: ${{ github.ref == 'refs/heads/main' && github.event_name == 'push' && '0.35' || '0' }}
+        run: |
+          uv sync --group strength
+          PYTHONPATH=build:bot uv run python scripts/gauntlet.py \
+            --stockfish "$(command -v stockfish)" \
+            --games "$GAUNTLET_GAMES" \
+            --elo 1600 \
+            --movetime-ms 200 \
+            --min-score "$GAUNTLET_MIN_SCORE" \
+            --pgn gauntlet.pgn
+      - name: Upload PGN
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: gauntlet-pgn
+          path: gauntlet.pgn
+          if-no-files-found: ignore
+
   deploy:
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    needs: [cpp-lint, cpp-test, python-lint, python-test]
+    needs: [cpp-lint, cpp-test, python-lint, python-test, strength]
     runs-on: ubuntu-latest
     env:
       FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

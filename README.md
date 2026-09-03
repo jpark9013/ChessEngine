@@ -3,7 +3,7 @@
 A from-scratch C++ chess library: legal move generation, FEN, SAN/UCI, evaluation, and alpha-beta search. There is a command-line player and a Python module via pybind11.
 
 <!-- elo-estimate:start -->
-Estimated strength: **2634 Elo** (±50, vs Stockfish `UCI_Elo`, 8 games at 30+0 / 60+0)
+Estimated strength: **2458 Elo** (±50, vs Stockfish `UCI_Elo`, 8 games at 30+0 / 60+0)
 <!-- elo-estimate:end -->
 
 This is a rewrite of the original single-header engine. The old design packed flags into coordinates, ignored pawn checks, leaked make/unmake on search cutoffs, and did not round-trip FEN. This tree splits those concerns into a small static library and locks the rules with perft.

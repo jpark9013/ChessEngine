@@ -17,7 +17,7 @@ import os
 import shutil
 import sys
 from collections.abc import Iterator
-from concurrent.futures import ProcessPoolExecutor, as_completed
+from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -85,6 +85,24 @@ def score_fraction(wins: int, draws: int, losses: int) -> float:
     if n <= 0:
         return 0.0
     return (wins + 0.5 * draws) / n
+
+
+def meets_floor(points: float, min_points: float) -> bool:
+    """True when points meet the CI floor. Exactly min_points passes."""
+    return points >= min_points
+
+
+def early_stop_decision(points: float, remaining: int, min_points: float) -> str | None:
+    """Return 'pass' or 'fail' if leftover games cannot change the gate, else None.
+
+    Remaining games can only add points, so P >= floor is already a pass. If
+    P + remaining < floor, even winning every leftover game cannot reach the floor.
+    """
+    if meets_floor(points, min_points):
+        return "pass"
+    if points + remaining < min_points:
+        return "fail"
+    return None
 
 
 def elo_from_score(score: float) -> float | None:
@@ -351,15 +369,39 @@ def run_gauntlet(args: argparse.Namespace) -> MatchScore:
 
     wins = draws = losses = crashes = illegal = 0
     ordered: list[GameRecord | None] = [None] * args.games
-    for record in stream:
-        ordered[record.index] = record
-        tag, wins, draws, losses, crashes, illegal = _apply_result(
-            record.result, wins, draws, losses, crashes, illegal
-        )
-        _print_game(record, args.games, tag, wins, draws, losses)
-        if record.result in {"crash", "illegal"}:
-            print(f"aborting gauntlet after {record.result}", flush=True)
+    try:
+        for record in stream:
+            ordered[record.index] = record
+            tag, wins, draws, losses, crashes, illegal = _apply_result(
+                record.result, wins, draws, losses, crashes, illegal
+            )
+            _print_game(record, args.games, tag, wins, draws, losses)
+            if record.result in {"crash", "illegal"}:
+                print(f"aborting gauntlet after {record.result}", flush=True)
+                break
+            played = wins + draws + losses
+            remaining = args.games - played
+            points = wins + 0.5 * draws
+            decision = early_stop_decision(points, remaining, args.min_points)
+            if remaining <= 0 or decision is None:
+                continue
+            if decision == "pass":
+                print(
+                    f"early PASS: {points:.1f} points already meet floor "
+                    f"{args.min_points:g}; skipping {remaining} remaining game(s)",
+                    flush=True,
+                )
+            else:
+                print(
+                    f"early FAIL: {points:.1f} points + {remaining} remaining "
+                    f"< floor {args.min_points:g}",
+                    flush=True,
+                )
             break
+    finally:
+        close = getattr(stream, "close", None)
+        if close is not None:
+            close()
 
     if pgn_path is not None:
         _write_pgn(pgn_path, ordered)
@@ -392,20 +434,37 @@ def _iter_parallel(
     concurrency: int,
 ) -> Iterator[GameRecord]:
     ctx = multiprocessing.get_context("spawn")
-    with ProcessPoolExecutor(
+    pool = ProcessPoolExecutor(
         max_workers=concurrency,
         mp_context=ctx,
         initializer=_init_worker,
         initargs=(sf_path, elo),
-    ) as pool:
-        futures = {pool.submit(_worker_play, i, max_ply): i for i in range(games)}
-        for fut in as_completed(futures):
+    )
+    pending: set[Future[GameRecord]] = set()
+    next_index = 0
+
+    def fill() -> None:
+        nonlocal next_index
+        while next_index < games and len(pending) < concurrency:
+            pending.add(pool.submit(_worker_play, next_index, max_ply))
+            next_index += 1
+
+    try:
+        fill()
+        while pending:
+            done, _ = wait(pending, return_when=FIRST_COMPLETED)
+            fut = next(iter(done))
+            pending.remove(fut)
             record = fut.result()
             yield record
             if record.result in {"crash", "illegal"}:
-                for other in futures:
-                    other.cancel()
                 return
+            fill()
+    finally:
+        for fut in pending:
+            fut.cancel()
+        # Cancel unstarted work. In-flight games may finish; we do not yield them.
+        pool.shutdown(wait=True, cancel_futures=True)
 
 
 def _write_summary(score: MatchScore, args: argparse.Namespace) -> None:
@@ -429,7 +488,7 @@ def _write_summary(score: MatchScore, args: argparse.Namespace) -> None:
                 "",
                 f"- Result: **{score.wins}-{score.draws}-{score.losses}** "
                 f"({score.fraction:.1%})",
-                f"- Floor: {args.min_points:g} points vs UCI_Elo {args.elo}",
+                f"- Floor: ≥ {args.min_points:g} points vs UCI_Elo {args.elo}",
                 f"- Clocks: {CLOCK_SHORT_S:.0f}s x4, {CLOCK_LONG_S:.0f}s x4",
                 f"- Elo diff (logistic): {diff_s}",
                 f"- Crashes: {score.crashes}, illegal moves: {score.illegal}",
@@ -502,13 +561,14 @@ def main(argv: list[str] | None = None) -> int:
             file=sys.stderr,
         )
         return 1
-    if score.points + 1e-9 < args.min_points:
+    if not meets_floor(score.points, args.min_points):
         print(
-            f"FAIL: score {score.points:.1f}/{score.games} < floor {args.min_points:g}",
+            f"FAIL: score {score.points:.1f}/{score.games} < floor {args.min_points:g} "
+            f"(need >= {args.min_points:g})",
             file=sys.stderr,
         )
         return 1
-    print("PASS")
+    print(f"PASS: {score.points:.1f} >= floor {args.min_points:g}")
     return 0
 
 

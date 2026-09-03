@@ -10,7 +10,11 @@ from lib.lichess_types import MOVE
 from engine import allocate_time, choose_depth, search_position
 
 
-class ChessEngine(MinimalEngine):
+class ExampleEngine(MinimalEngine):
+    """lichess-bot imports this name from homemade.py before loading ChessEngine."""
+
+
+class ChessEngine(ExampleEngine):
     def search(
         self,
         board: chess.Board,

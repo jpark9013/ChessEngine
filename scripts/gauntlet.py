@@ -3,9 +3,11 @@
 
 Used as the CI publish floor and (with --calibrate) to binary-search
 Stockfish UCI_Elo until an 8-game match is about even (±50). Default
-clocks are 30+0 and 60+0; --clocks accepts any base+increment list.
-Games inside one probe run in parallel (max 4); search iterations are
-sequential.
+clock is 60+0 (1+0 sudden death). Stockfish gets remaining wtime/btime
+so its own time manager runs; our engine uses the live allocator
+against the same remaining clock. --clocks accepts any base+increment
+list. Games inside one probe run in parallel (max 4); search iterations
+are sequential.
 Requires python-chess, a Stockfish binary, and the chessengine module on
 PYTHONPATH.
 """
@@ -32,11 +34,13 @@ DEFAULT_MIN_POINTS = 4.0
 DEFAULT_CONCURRENCY = 2
 DEFAULT_CALIBRATE_CONCURRENCY = 4
 # 4 vCPU GHA runner: 4 games ≈ 8 threads (engine + 1-thread SF). More than
-# this oversubscribes past the ~100 Elo contention budget at 35–100ms/move.
+# this oversubscribes past the ~100 Elo contention budget on 1+0 clocks.
 MAX_CONCURRENCY = 4
 DEFAULT_MAX_PLY = 180
 DEFAULT_TOLERANCE = 50
-DEFAULT_CLOCKS_SPEC = "30+0,60+0"
+DEFAULT_CLOCKS_SPEC = "60+0"
+# Live allocator vs remaining game clock (same protocol as Lichess 1+0).
+OUR_TIME_MODE = "live"
 SF_THREADS = 1
 SF_HASH_MB = 16
 # Stockfish 16/17 UCI_Elo range when the binary cannot be probed.
@@ -73,7 +77,7 @@ class TimeControl:
     spec: str = ""
 
     def display(self) -> str:
-        """Canonical `base+inc` in seconds (`30+0`, `60+1`)."""
+        """Canonical `base+inc` in seconds (`60+0`, `60+1`)."""
         return f"{_fmt_seconds(self.base_s)}+{_fmt_seconds(self.increment_s)}"
 
 
@@ -151,7 +155,7 @@ def parse_clocks(text: str) -> list[TimeControl]:
     if not parts or any(not part for part in parts):
         raise ValueError(
             f"invalid --clocks {text!r}: expected a comma-separated list "
-            f"such as 30+0,60+0"
+            f"such as 60+0 or 30+0,60+0"
         )
     return [parse_time_control(part) for part in parts]
 
@@ -165,6 +169,44 @@ def clock_for_game(index: int, clocks: list[TimeControl] | None = None) -> TimeC
     if not seq:
         raise ValueError("clocks list is empty")
     return seq[index % len(seq)]
+
+
+@dataclass(frozen=True)
+class ClockLimit:
+    """Remaining game clocks for Stockfish. Never a per-move `time`/movetime."""
+
+    white_clock: float
+    black_clock: float
+    white_inc: float = 0.0
+    black_inc: float = 0.0
+
+    @property
+    def time(self) -> None:
+        return None
+
+    def to_engine_limit(self) -> object:
+        import chess.engine
+
+        return chess.engine.Limit(
+            white_clock=self.white_clock,
+            black_clock=self.black_clock,
+            white_inc=self.white_inc,
+            black_inc=self.black_inc,
+        )
+
+
+def stockfish_limit(
+    white_clock: float,
+    black_clock: float,
+    increment_s: float = 0.0,
+) -> ClockLimit:
+    """Limit sent to Stockfish: remaining wtime/btime (+ increment), not movetime."""
+    return ClockLimit(
+        white_clock=max(0.0, white_clock),
+        black_clock=max(0.0, black_clock),
+        white_inc=max(0.0, increment_s),
+        black_inc=max(0.0, increment_s),
+    )
 
 
 def _clocks_arg(text: str) -> list[TimeControl]:
@@ -411,7 +453,7 @@ def format_strength_block(
     *,
     tolerance: int = DEFAULT_TOLERANCE,
     games: int = DEFAULT_GAMES,
-    clocks: str = "30+0 / 60+0",
+    clocks: str = "60+0",
 ) -> str:
     """README block between the elo-estimate HTML markers."""
     label = "unmeasured" if estimate is None else f"{estimate.display_elo()} Elo"
@@ -490,14 +532,14 @@ def _configure_stockfish(engine: object, elo: int) -> str:
 
 
 def _clock_for_game(index: int, clocks: list[TimeControl] | None = None) -> TimeControl:
-    """Game clock by index. Default cycles 30+0 / 60+0."""
+    """Game clock by index. Default is 60+0 for every game."""
     return clock_for_game(index, clocks)
 
 
 def _our_move(fen: str, clock_s: float, increment_s: float, ply: int) -> str:
     from engine import allocate_time, search_position
 
-    budget = allocate_time(clock_s, increment_s, None, ply=ply)
+    budget = allocate_time(clock_s, increment_s, None, ply=ply, mode=OUR_TIME_MODE)
     result = search_position(
         fen,
         max_seconds=budget.hard,
@@ -517,16 +559,14 @@ def _play_game(
 ) -> tuple[str, object]:
     """Play one game on `clock` (whole-game base + increment per side).
 
-    Each ply gets a short think from `allocate_time` (tens of ms). Do not send
-    the remaining base clock to Stockfish as wtime/btime — it would then spend
-    seconds on a single move.
+    Stockfish receives remaining wtime/btime (and increment) so its own time
+    manager runs. Our engine uses allocate_time(..., mode="live") against the
+    same remaining clock — the SF-style ~1.5s/8s opening budget on 60+0, not
+    the old 35/100ms handicap. A side whose remaining clock hits 0 flags.
     """
     import time
 
     import chess
-    import chess.engine
-
-    from engine import allocate_time
 
     board = chess.Board()
     for uci in opening:
@@ -540,7 +580,6 @@ def _play_game(
         mover_white = board.turn == chess.WHITE
         ours = mover_white == we_are_white
         side_clock = white_clock if mover_white else black_clock
-        budget = allocate_time(side_clock, increment, None, ply=board.ply())
         started = time.perf_counter()
         if ours:
             try:
@@ -554,7 +593,7 @@ def _play_game(
         else:
             played = stockfish.play(  # type: ignore[attr-defined]
                 board,
-                chess.engine.Limit(time=max(0.01, budget.hard)),
+                stockfish_limit(white_clock, black_clock, increment).to_engine_limit(),
             )
             if played.move is None:
                 return "crash", board
@@ -921,7 +960,8 @@ def _parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "  5m+0            5 minutes (use m / min suffix for minutes)\n"
             "  3+2             3 seconds + 2s increment, not 3 minutes\n"
             "  1m30s+2         90s + 2s increment\n"
-            "  30+0,60+0       cycle by game index (default; even=30+0, odd=60+0)\n"
+            "  60+0            default: 8 games of 1+0 (60s sudden death)\n"
+            "  30+0,60+0       cycle by game index (even=30+0, odd=60+0)\n"
             "\n"
             "concurrency: 1–4 games at once. Strength gate defaults to 2;\n"
             "--calibrate defaults to 4. Binary-search probes are sequential;\n"
@@ -1019,7 +1059,7 @@ def validate_concurrency(n: int) -> None:
             f"concurrency must be 1–{MAX_CONCURRENCY} (got {n}). "
             f"A GitHub ubuntu-latest runner has ~4 vCPU; each game is ChessEngine "
             f"+ 1-thread Stockfish. {MAX_CONCURRENCY} pairs is about 8 threads and "
-            f"stays near the ~100 Elo contention budget at 35–100ms/move."
+            f"stays near the ~100 Elo contention budget on 1+0 game clocks."
         )
 
 

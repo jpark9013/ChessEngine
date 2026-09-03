@@ -197,9 +197,21 @@ int Searcher::move_score(const Board& board, const Move& m, const Move& hash, in
   if (ply >= 0 && ply < kMaxPly) {
     if (m == killers_[ply][0]) return 90'000;
     if (m == killers_[ply][1]) return 80'000;
+    const Move prev = ancestors_[ply];
+    if (!prev.is_null() && prev.from.valid() && prev.to.valid() &&
+        m == countermove_[prev.from.index()][prev.to.index()]) {
+      return 70'000;
+    }
   }
   if (m.flag == MoveFlag::CastleKingside || m.flag == MoveFlag::CastleQueenside) return 50;
-  return history_[m.from.index()][m.to.index()];
+  int hist = history_[m.from.index()][m.to.index()];
+  if (ply >= 0 && ply < kMaxPly) {
+    const Move prev = ancestors_[ply];
+    if (!prev.is_null() && prev.to.valid()) {
+      hist += continuation_[prev.to.index()][m.to.index()];
+    }
+  }
+  return hist;
 }
 
 void Searcher::score_moves(const Board& board, const MoveList& moves, int* scores, const Move& hash,
@@ -226,15 +238,34 @@ void Searcher::order_moves(Board& board, MoveList& moves, const Move& hash, int 
   for (int i = 0; i < moves.size(); ++i) pick_next(moves, scores, i);
 }
 
+void Searcher::apply_history(int& entry, int bonus) {
+  static constexpr int kHistoryMax = 16384;
+  bonus = std::clamp(bonus, -kHistoryMax, kHistoryMax);
+  entry += bonus - entry * std::abs(bonus) / kHistoryMax;
+}
+
+void Searcher::age_history() {
+  for (int i = 0; i < 64; ++i) {
+    for (int j = 0; j < 64; ++j) {
+      history_[i][j] /= 2;
+      continuation_[i][j] /= 2;
+    }
+  }
+}
+
 void Searcher::on_quiet_cutoff(int ply, const Move& m, int depth) {
   if (ply < 0 || ply >= kMaxPly) return;
   if (killers_[ply][0] != m) {
     killers_[ply][1] = killers_[ply][0];
     killers_[ply][0] = m;
   }
-  int& h = history_[m.from.index()][m.to.index()];
-  h += depth * depth;
-  if (h > 20'000) h = 20'000;
+  const int bonus = depth * depth;
+  apply_history(history_[m.from.index()][m.to.index()], bonus);
+  const Move prev = ancestors_[ply];
+  if (!prev.is_null() && prev.from.valid() && prev.to.valid()) {
+    countermove_[prev.from.index()][prev.to.index()] = m;
+    apply_history(continuation_[prev.to.index()][m.to.index()], bonus);
+  }
 }
 
 bool Searcher::time_up() const {
@@ -338,11 +369,13 @@ int Searcher::minimax(Board& board, int depth, int ply) {
   return best;
 }
 
-int Searcher::alphabeta(Board& board, int depth, int ply, int alpha, int beta, bool pv) {
+int Searcher::alphabeta(Board& board, int depth, int ply, int alpha, int beta, bool pv,
+                        const Move& prev, int ext_used) {
   ++nodes_;
   if (timed_out()) return board.evaluate();
   if (ply >= kMaxPly - 1) return board.evaluate();
   if (board.halfmove_clock() >= 100 || board.repetition_count() >= 3) return 0;
+  if (ply >= 0 && ply < kMaxPly) ancestors_[ply] = prev;
 
   const int orig_alpha = alpha;
   alpha = std::max(alpha, -kMateScore + ply);
@@ -350,7 +383,15 @@ int Searcher::alphabeta(Board& board, int depth, int ply, int alpha, int beta, b
   if (alpha >= beta) return alpha;
 
   const bool in_check = board.in_check();
-  if (in_check) depth = std::max(depth, 1);
+  if (in_check) {
+    // Real check extension (not only "stay in search"). Cap so checks cannot
+    // recurse at the same depth forever.
+    if (ply > 0 && ply < 16 && ext_used < 2) {
+      ++depth;
+      ++ext_used;
+    }
+    depth = std::max(depth, 1);
+  }
 
   if (depth <= 0) {
     if (limits_.mode == SearchMode::AlphaBetaQuiescence && !abort_) {
@@ -363,6 +404,11 @@ int Searcher::alphabeta(Board& board, int depth, int ply, int alpha, int beta, b
   Move hash_move = tt().probe_move(key);
   int tt_score = 0;
   if (!pv && tt().cutoff(key, depth, ply, alpha, beta, tt_score)) return tt_score;
+
+  // Internal iterative reduction: no TT move at high depth → search shallower.
+  if (!in_check && hash_move.is_null() && depth >= 5) {
+    --depth;
+  }
 
   const int eval = in_check ? -kInfScore : board.evaluate();
   if (!in_check) eval_stack_[ply] = eval;
@@ -378,7 +424,8 @@ int Searcher::alphabeta(Board& board, int depth, int ply, int alpha, int beta, b
       board.has_non_pawn_material(board.side_to_move())) {
     const int R = 2 + depth / 4 + (improving ? 1 : 0);
     board.make_null();
-    int score = -alphabeta(board, std::max(0, depth - 1 - R), ply + 1, -beta, -beta + 1, false);
+    int score = -alphabeta(board, std::max(0, depth - 1 - R), ply + 1, -beta, -beta + 1, false,
+                           Move{}, ext_used);
     board.unmake();
     if (abort_) return eval;
     if (score >= beta) {
@@ -417,14 +464,15 @@ int Searcher::alphabeta(Board& board, int depth, int ply, int alpha, int beta, b
 
     int score;
     if (legal == 1) {
-      score = -alphabeta(board, new_depth, ply + 1, -beta, -alpha, pv);
+      score = -alphabeta(board, new_depth, ply + 1, -beta, -alpha, pv, m, ext_used);
     } else {
-      score = -alphabeta(board, new_depth - reduction, ply + 1, -alpha - 1, -alpha, false);
+      score = -alphabeta(board, new_depth - reduction, ply + 1, -alpha - 1, -alpha, false, m,
+                         ext_used);
       if (reduction > 0 && score > alpha) {
-        score = -alphabeta(board, new_depth, ply + 1, -alpha - 1, -alpha, false);
+        score = -alphabeta(board, new_depth, ply + 1, -alpha - 1, -alpha, false, m, ext_used);
       }
       if (pv && score > alpha && score < beta) {
-        score = -alphabeta(board, new_depth, ply + 1, -beta, -alpha, true);
+        score = -alphabeta(board, new_depth, ply + 1, -beta, -alpha, true, m, ext_used);
       }
     }
     board.unmake();
@@ -497,8 +545,9 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
   for (int p = 0; p < kMaxPly; ++p) {
     killers_[p][0] = Move{};
     killers_[p][1] = Move{};
+    ancestors_[p] = Move{};
   }
-  std::memset(history_, 0, sizeof(history_));
+  age_history();
   std::memset(eval_stack_, 0, sizeof(eval_stack_));
   eval_stack_[0] = board.evaluate();
 
@@ -583,11 +632,11 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
         if (limits.mode == SearchMode::Minimax) {
           score = -minimax(board, depth - 1, 1);
         } else if (i == 0) {
-          score = -alphabeta(board, depth - 1, 1, -asp_beta, -asp_alpha, true);
+          score = -alphabeta(board, depth - 1, 1, -asp_beta, -asp_alpha, true, moves[i], 0);
         } else {
-          score = -alphabeta(board, depth - 1, 1, -alpha - 1, -alpha, false);
+          score = -alphabeta(board, depth - 1, 1, -alpha - 1, -alpha, false, moves[i], 0);
           if (score > alpha && score < asp_beta) {
-            score = -alphabeta(board, depth - 1, 1, -asp_beta, -alpha, true);
+            score = -alphabeta(board, depth - 1, 1, -asp_beta, -alpha, true, moves[i], 0);
           }
         }
         board.unmake();
@@ -667,7 +716,8 @@ SearchResult Searcher::search(Board& board, const SearchLimits& limits) {
 }
 
 SearchResult search(Board& board, const SearchLimits& limits) {
-  Searcher s;
+  // Process-lifetime searcher so history / countermove persist across moves.
+  static Searcher s;
   return s.search(board, limits);
 }
 

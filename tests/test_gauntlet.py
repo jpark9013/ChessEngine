@@ -10,14 +10,17 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent / "scripts"))
 
 from gauntlet import (
+    DEFAULT_CLOCKS_SPEC,
     DEFAULT_TOLERANCE,
     ELO_MARK_END,
     ELO_MARK_START,
     MAX_CONCURRENCY,
+    OUR_TIME_MODE,
     SF_UCI_ELO_MAX,
     SF_UCI_ELO_MIN,
     EloEstimate,
     MatchScore,
+    TimeControl,
     _clock_for_game,
     _parse_args,
     binary_search_elo,
@@ -33,10 +36,18 @@ from gauntlet import (
     replace_readme_estimate,
     resolve_elo_bounds,
     score_fraction,
+    stockfish_limit,
     uci_elo_limits_from_options,
     update_readme_estimate,
     validate_concurrency,
 )
+
+try:
+    import chess  # noqa: F401
+
+    HAS_CHESS = True
+except ImportError:
+    HAS_CHESS = False
 
 
 class TestGauntletScore(unittest.TestCase):
@@ -93,7 +104,7 @@ class TestGauntletScore(unittest.TestCase):
         self.assertEqual(args.elo, 2200)
         self.assertFalse(args.calibrate)
         self.assertEqual(args.tolerance, 50)
-        self.assertEqual([tc.display() for tc in args.clocks], ["30+0", "60+0"])
+        self.assertEqual([tc.display() for tc in args.clocks], ["60+0"])
 
     def test_cli_calibrate_defaults_concurrency_four(self) -> None:
         args = _parse_args(["--calibrate"])
@@ -111,11 +122,11 @@ class TestGauntletScore(unittest.TestCase):
             _parse_args(["--help"])
         self.assertEqual(ctx.exception.code, 0)
 
-    def test_clocks_split_eight_games(self) -> None:
+    def test_clocks_default_is_one_plus_zero(self) -> None:
         clocks = [_clock_for_game(i) for i in range(8)]
-        self.assertEqual(sum(1 for c in clocks if c.base_s == 30.0), 4)
-        self.assertEqual(sum(1 for c in clocks if c.base_s == 60.0), 4)
-        self.assertTrue(all(c.increment_s == 0.0 for c in clocks))
+        self.assertEqual(DEFAULT_CLOCKS_SPEC, "60+0")
+        self.assertTrue(all(c.base_s == 60.0 and c.increment_s == 0.0 for c in clocks))
+        self.assertEqual(clocks_label(clocks[:1]), "60+0")
 
     def test_elo_even_is_zero(self) -> None:
         diff = elo_from_score(0.5)
@@ -200,6 +211,74 @@ class TestTimeControlParse(unittest.TestCase):
     def test_cli_rejects_garbage_clocks(self) -> None:
         with self.assertRaises(SystemExit):
             _parse_args(["--clocks", "not-a-clock"])
+
+
+class TestStockfishClockProtocol(unittest.TestCase):
+    def test_stockfish_gets_remaining_clocks_not_movetime(self) -> None:
+        limit = stockfish_limit(60.0, 45.5, 0.0)
+        self.assertIsNone(limit.time)
+        self.assertEqual(limit.white_clock, 60.0)
+        self.assertEqual(limit.black_clock, 45.5)
+        self.assertEqual(limit.white_inc, 0.0)
+        self.assertEqual(limit.black_inc, 0.0)
+        self.assertGreater(limit.white_clock, 1.0)
+        self.assertNotAlmostEqual(limit.white_clock, 0.1)
+
+    def test_stockfish_limit_forwards_increment(self) -> None:
+        limit = stockfish_limit(30.0, 28.0, 1.0)
+        self.assertIsNone(limit.time)
+        self.assertEqual(limit.white_inc, 1.0)
+        self.assertEqual(limit.black_inc, 1.0)
+
+    def test_stockfish_limit_clamps_negative_remaining(self) -> None:
+        limit = stockfish_limit(-0.2, 12.0, 0.0)
+        self.assertEqual(limit.white_clock, 0.0)
+        self.assertEqual(limit.black_clock, 12.0)
+        self.assertIsNone(limit.time)
+
+    def test_our_engine_uses_live_clock_mode(self) -> None:
+        self.assertEqual(OUR_TIME_MODE, "live")
+        self.assertNotEqual(OUR_TIME_MODE, "gauntlet")
+
+    @unittest.skipUnless(HAS_CHESS, "python-chess not installed")
+    def test_play_game_sends_remaining_clocks_to_stockfish(self) -> None:
+        from unittest.mock import MagicMock, patch
+
+        from gauntlet import _play_game
+
+        captured: list[object] = []
+
+        def play(board: object, limit: object) -> object:
+            captured.append(limit)
+            result = MagicMock()
+            result.move = next(iter(board.legal_moves))  # type: ignore[attr-defined]
+            return result
+
+        sf = MagicMock()
+        sf.play.side_effect = play
+        with patch("gauntlet._our_move", return_value="e2e4"):
+            _play_game(
+                stockfish=sf,
+                opening=[],
+                we_are_white=True,
+                clock=TimeControl(base_s=60.0, increment_s=0.0, spec="60+0"),
+                max_ply=2,
+            )
+
+        self.assertTrue(captured)
+        limit = captured[0]
+        self.assertIsNone(limit.time)
+        self.assertGreaterEqual(limit.black_clock, 50.0)
+        self.assertGreaterEqual(limit.white_clock, 1.0)
+        self.assertNotAlmostEqual(limit.white_clock, 0.1)
+        self.assertNotAlmostEqual(limit.black_clock, 0.1)
+
+    @unittest.skipUnless(HAS_CHESS, "python-chess not installed")
+    def test_engine_limit_has_no_movetime(self) -> None:
+        limit = stockfish_limit(60.0, 59.0, 0.0).to_engine_limit()
+        self.assertIsNone(limit.time)
+        self.assertAlmostEqual(limit.white_clock, 60.0)
+        self.assertAlmostEqual(limit.black_clock, 59.0)
 
 
 class TestConcurrency(unittest.TestCase):
@@ -308,7 +387,7 @@ class TestReadmeEstimate(unittest.TestCase):
         estimate = EloEstimate(1750, 1850, 1320, 3190, "range")
         block = format_strength_block(estimate)
         self.assertIn("**1800 Elo**", block)
-        self.assertIn("30+0 / 60+0", block)
+        self.assertIn("60+0", block)
 
     def test_format_edges(self) -> None:
         low = EloEstimate(1320, 1320, 1320, 3190, "at_most")

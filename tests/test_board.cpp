@@ -375,6 +375,24 @@ TEST(Eval, KingCenterBetterInEndgameThanMiddlegame) {
   EXPECT_GT(eg_delta, mg_delta);
 }
 
+TEST(Eval, RookOnSeventhBetterThanSecond) {
+  Board seventh = Board::from_fen("4k3/3R4/8/8/8/8/8/4K3 w - - 0 1");
+  Board second = Board::from_fen("4k3/8/8/8/8/8/3R4/4K3 w - - 0 1");
+  EXPECT_GT(seventh.evaluate_white(), second.evaluate_white());
+}
+
+TEST(Eval, KnightOutpostBetterThanUnsupported) {
+  Board outpost = Board::from_fen("4k3/8/8/3N4/2P5/8/8/4K3 w - - 0 1");
+  Board rim = Board::from_fen("4k3/8/8/8/2P5/8/8/N3K3 w - - 0 1");
+  EXPECT_GT(outpost.evaluate_white(), rim.evaluate_white());
+}
+
+TEST(Eval, PawnThreatOnMinor) {
+  Board hanging = Board::from_fen("4k3/8/8/8/3n4/4P3/8/4K3 w - - 0 1");
+  Board safe = Board::from_fen("4k3/8/8/8/3n4/8/4P3/4K3 w - - 0 1");
+  EXPECT_GT(hanging.evaluate_white(), safe.evaluate_white());
+}
+
 TEST(Search, FindsMateInOne) {
   Board b = Board::from_fen("6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1");
   auto r = search(b, SearchLimits{1, 0.0, SearchMode::AlphaBeta});
@@ -408,6 +426,24 @@ TEST(Search, OneLegalMoveSkipsSearch) {
   auto r = search(b, SearchLimits{8, 0.0, SearchMode::AlphaBetaQuiescence});
   EXPECT_EQ(r.best_move.uci(), "a8a7");
   EXPECT_EQ(r.depth, 0);
+}
+
+TEST(Search, InCheckFindsLegalEvasion) {
+  Board b = Board::from_fen("3Rk3/8/8/8/8/8/8/4K3 b - - 0 1");
+  EXPECT_TRUE(b.in_check());
+  auto r = search(b, SearchLimits{4, 0.0, SearchMode::AlphaBetaQuiescence});
+  EXPECT_FALSE(r.best_move.is_null());
+  EXPECT_TRUE(b.is_legal(r.best_move));
+  EXPECT_EQ(b.fen(), "3Rk3/8/8/8/8/8/8/4K3 b - - 0 1");
+}
+
+TEST(Search, ConsecutiveSearchesKeepFindingMate) {
+  Board first = Board::from_fen("6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1");
+  auto a = search(first, SearchLimits{2, 0.0, SearchMode::AlphaBetaQuiescence});
+  EXPECT_EQ(a.best_move.uci(), "a1a8");
+  Board second = Board::from_fen("6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1");
+  auto b = search(second, SearchLimits{2, 0.0, SearchMode::AlphaBetaQuiescence});
+  EXPECT_EQ(b.best_move.uci(), "a1a8");
 }
 
 TEST(Search, TimeBudgetDoesNotOverrunHardLimit) {

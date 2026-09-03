@@ -103,6 +103,44 @@ constexpr int kPstEgPawn[64] = {
     50, 50, 50, 50, 50, 50, 50, 50,
      0,  0,  0,  0,  0,  0,  0,  0};
 
+// PeSTO-style EG tables (a1=0, white). Positional only; material is separate.
+constexpr int kPstEgKnight[64] = {
+    -29, -51, -23, -15, -22, -18, -50, -64,
+    -42, -20, -10,  -5,  -2, -20, -23, -44,
+    -23,  -3,  -1,  15,  10,  -3, -20, -22,
+    -18,  -6,  16,  25,  16,  17,   4, -18,
+    -17,   3,  22,  22,  22,  11,   8, -18,
+    -24, -20,  10,   9,  -1,  -9, -19, -41,
+    -25,  -8, -25,  -2,  -9, -25, -24, -52,
+    -58, -38, -13, -28, -31, -27, -63, -99};
+constexpr int kPstEgBishop[64] = {
+    -23,  -9, -23,  -5,  -9, -16,  -5, -17,
+    -14, -18,  -7,  -1,   4,  -9, -15, -27,
+    -12,  -3,   8,  10,  13,   3,  -7, -15,
+     -6,   3,  13,  19,   7,  10,  -3,  -9,
+     -3,   9,  12,   9,  14,  10,   3,   2,
+      2,  -8,   0,  -1,  -2,   6,   0,   4,
+     -8,  -4,   7, -12,  -3, -13,  -4, -14,
+    -14, -21, -11,  -8,  -7,  -9, -17, -24};
+constexpr int kPstEgRook[64] = {
+     -9,   2,   3,  -1,  -5, -13,   4, -20,
+     -6,  -6,   0,   2,  -9,  -9, -11,  -3,
+     -4,   0,  -5,  -1,  -7, -12,  -8, -16,
+      3,   5,   8,   4,  -5,  -6,  -8, -11,
+      4,   3,  13,   1,   2,   1,  -1,   2,
+      7,   7,   7,   5,   4,  -3,  -5,  -3,
+     11,  13,  13,  11,  -3,   3,   8,   3,
+     13,  10,  18,  15,  12,  12,   8,   5};
+constexpr int kPstEgQueen[64] = {
+    -33, -28, -22, -43,  -5, -32, -20, -41,
+    -22, -23, -30, -16, -16, -23, -36, -32,
+    -16, -27,  15,   6,   9,  17,  10,   5,
+    -18,  28,  19,  47,  31,  34,  39,  23,
+      3,  22,  24,  45,  57,  40,  57,  36,
+    -20,   6,   9,  49,  47,  35,  19,   9,
+    -17,  20,  32,  41,  58,  25,  30,   0,
+     -9,  22,  22,  27,  27,  19,  10,  20};
+
 constexpr int kPassedMg[8] = {0, 5, 10, 18, 28, 42, 70, 0};
 constexpr int kPassedEg[8] = {0, 10, 20, 35, 55, 85, 130, 0};
 constexpr int kIsolatedMg = 12;
@@ -116,6 +154,17 @@ constexpr int kRookSemi = 6;
 constexpr int kMobility = 2;
 constexpr int kShieldClose = 8;
 constexpr int kShieldFar = 3;
+constexpr int kOutpostMg = 14;
+constexpr int kOutpostEg = 10;
+constexpr int kRook7thMg = 16;
+constexpr int kRook7thEg = 22;
+constexpr int kRook7thKing = 8;
+constexpr int kThreatMinorMg = 16;
+constexpr int kThreatMinorEg = 12;
+constexpr int kThreatRookMg = 28;
+constexpr int kThreatRookEg = 20;
+constexpr int kThreatQueenMg = 42;
+constexpr int kThreatQueenEg = 32;
 
 struct MgEg {
   int mg = 0;
@@ -138,14 +187,24 @@ int eval_delta_mg(Piece p, Square sq) {
   return signed_val(c, val);
 }
 
+int eg_pst(PieceType t, int idx) {
+  switch (t) {
+    case PieceType::Pawn: return kPstEgPawn[idx];
+    case PieceType::Knight: return kPstEgKnight[idx];
+    case PieceType::Bishop: return kPstEgBishop[idx];
+    case PieceType::Rook: return kPstEgRook[idx];
+    case PieceType::Queen: return kPstEgQueen[idx];
+    default: return 0;
+  }
+}
+
 int eval_delta_eg(Piece p, Square sq) {
   if (p == Piece::None) return 0;
   const Color c = color_of(p);
   const PieceType t = type_of(p);
   if (t == PieceType::King) return 0;
   const int idx = pst_index(c, sq);
-  const int pst = (t == PieceType::Pawn) ? kPstEgPawn[idx] : kPst[static_cast<int>(t)][idx];
-  return signed_val(c, kPieceValue[static_cast<int>(t)] + pst);
+  return signed_val(c, kPieceValue[static_cast<int>(t)] + eg_pst(t, idx));
 }
 
 int king_mg_delta(Piece p, Square sq) {
@@ -242,6 +301,45 @@ int king_pawn_shield(Square k, Bitboard pawns, Color c) {
     if (on_board(r1, f) && (pawns & bit(r1 * 8 + f))) s += kShieldClose;
     else if (on_board(r2, f) && (pawns & bit(r2 * 8 + f))) s += kShieldFar;
   }
+  return s;
+}
+
+Bitboard pawn_attacks_bb(Bitboard pawns, Color c) {
+  return c == Color::White ? (shift_ne(pawns) | shift_nw(pawns))
+                           : (shift_se(pawns) | shift_sw(pawns));
+}
+
+int knight_outposts(Bitboard knights, Bitboard our_pawns, Bitboard their_pawns, Color us) {
+  const Bitboard support = pawn_attacks_bb(our_pawns, us);
+  const Bitboard hit_by_pawn = pawn_attacks_bb(their_pawns, opposite(us));
+  const Bitboard zone = us == Color::White ? (kRank4 | kRank5 | kRank6) : (kRank5 | kRank4 | kRank3);
+  return popcount(knights & support & ~hit_by_pawn & zone);
+}
+
+MgEg rook_on_seventh(Bitboard rooks, Square enemy_king, Color us) {
+  const Bitboard seventh = us == Color::White ? kRank7 : kRank2;
+  const int n = popcount(rooks & seventh);
+  MgEg s;
+  if (n == 0) return s;
+  s.mg = kRook7thMg * n;
+  s.eg = kRook7thEg * n;
+  const int back = us == Color::White ? 7 : 0;
+  if (enemy_king.valid() && enemy_king.rank() == back) {
+    s.mg += kRook7thKing * n;
+    s.eg += kRook7thKing * n;
+  }
+  return s;
+}
+
+MgEg pawn_threats(Bitboard our_pawns, Color us, Bitboard their_minors, Bitboard their_rooks,
+                  Bitboard their_queens) {
+  const Bitboard att = pawn_attacks_bb(our_pawns, us);
+  const int minors = popcount(att & their_minors);
+  const int rooks = popcount(att & their_rooks);
+  const int queens = popcount(att & their_queens);
+  MgEg s;
+  s.mg = kThreatMinorMg * minors + kThreatRookMg * rooks + kThreatQueenMg * queens;
+  s.eg = kThreatMinorEg * minors + kThreatRookEg * rooks + kThreatQueenEg * queens;
   return s;
 }
 
@@ -793,6 +891,29 @@ int Board::evaluate_white() const {
 
   mg += king_pawn_shield(white_king_, wp, Color::White) -
         king_pawn_shield(black_king_, bp, Color::Black);
+
+  const Bitboard wn = piece_bb(Color::White, PieceType::Knight);
+  const Bitboard bn = piece_bb(Color::Black, PieceType::Knight);
+  const int outposts = knight_outposts(wn, wp, bp, Color::White) -
+                       knight_outposts(bn, bp, wp, Color::Black);
+  mg += kOutpostMg * outposts;
+  eg += kOutpostEg * outposts;
+
+  const MgEg wr7 = rook_on_seventh(piece_bb(Color::White, PieceType::Rook), black_king_,
+                                   Color::White);
+  const MgEg br7 = rook_on_seventh(piece_bb(Color::Black, PieceType::Rook), white_king_,
+                                   Color::Black);
+  mg += wr7.mg - br7.mg;
+  eg += wr7.eg - br7.eg;
+
+  const Bitboard wmin = wn | wb;
+  const Bitboard bmin = bn | bb;
+  const MgEg wth = pawn_threats(wp, Color::White, bmin, piece_bb(Color::Black, PieceType::Rook),
+                                piece_bb(Color::Black, PieceType::Queen));
+  const MgEg bth = pawn_threats(bp, Color::Black, wmin, piece_bb(Color::White, PieceType::Rook),
+                                piece_bb(Color::White, PieceType::Queen));
+  mg += wth.mg - bth.mg;
+  eg += wth.eg - bth.eg;
 
   const int phase = std::min(phase_, kMaxPhase);
   return (phase * mg + (kMaxPhase - phase) * eg) / kMaxPhase;

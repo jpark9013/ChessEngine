@@ -67,7 +67,7 @@ jobs:
     if: github.actor != 'github-actions[bot]'
     needs: [cpp-test, python-test]
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 60
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@v5
@@ -100,8 +100,8 @@ jobs:
             --games 8 \
             --elo 2200 \
             --min-points 4 \
-            --clocks 30+0,60+0 \
-            --concurrency 2 \
+            --clocks 60+0 \
+            --concurrency 4 \
             --pgn gauntlet.pgn
       - name: Upload PGN
         if: always()
@@ -173,7 +173,7 @@ jobs:
             --stockfish "$(command -v stockfish)" \
             --games 8 \
             --min-points 4 \
-            --clocks 30+0,60+0 \
+            --clocks 60+0 \
             --concurrency 4 \
             --tolerance 50 \
             --update-readme README.md \

@@ -28,7 +28,7 @@ class ChessEngine(ExampleEngine):
         else:
             our, inc = time_limit.black_clock, time_limit.black_inc
 
-        budget = allocate_time(our, inc, time_limit.time, ply=board.ply())
+        budget = allocate_time(our, inc, time_limit.time, ply=board.ply(), mode="live")
         depth = min(choose_depth(our, time_limit.depth), budget.max_depth)
         roots = None
         if isinstance(root_moves, list):

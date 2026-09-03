@@ -2,7 +2,11 @@
 
 The worker is [lichess-bot](https://github.com/lichess-bot-devs/lichess-bot) plus our homemade engine. Game play still goes through lichess-bot. Outgoing matchmaking policy (who to challenge, 1+0, reject cooldown) lives in `bot/matchmaking.py` and is installed as a hook (`bot/lichess_hooks.py`) before `lichess-bot` starts.
 
-The bot only accepts **bullet with base ≤ 120s** (1+0, 2+1, 1+1, 30+0, ½+0). Lichess does not allow bots to play ultraBullet. Blitz/rapid/classical are refused. Search uses a two-layer bullet clock: an **optimum** (~35ms) for a stable PV and a **maximum** (~100ms) if the best move keeps changing. Obvious positions stop early; messy ones spend toward the maximum. Concurrency is 1 so one game owns the CPU. `move_overhead` is 350ms.
+The bot only accepts **bullet with base ≤ 120s** (1+0, 2+1, 1+1, 30+0, ½+0). Lichess does not allow bots to play ultraBullet. Blitz/rapid/classical are refused.
+
+Search is **classical** (tapered HCE, no NNUE). Live clocks use a Stockfish-style two-layer allocator in `bot/engine.py`: subtract `move_overhead` (350ms), then `optimum ≈ usable / horizon` (horizon 20–40 remaining moves, shrinking with ply) plus ~0.65× increment. `maximum` is about 5.5–8× optimum, never more than 75% of remaining after overhead, and always leaves a flag buffer. A 1+0 opening move therefore thinks **~1.5s** (hard cap ~8s if the PV is unstable), not 35ms. Panic remaining (<0.4s) uses a tiny fixed think. C++ iterative deepening stops at the optimum when the PV is stable and spends toward the maximum only when the best move keeps changing. Depth is allowed up to 64; time is the real limit. Concurrency is 1 so one game owns the CPU.
+
+The Stockfish **gauntlet / Elo CI job** uses the same live allocator against a **60+0** (1+0) game clock. Stockfish gets remaining `wtime`/`btime` so its own time manager runs; we still have the heuristic (~1.5s opening / ~8s hard on a full 60s clock). A side that hits 0 loses on time.
 
 `bot/engine.py` is the contract: FEN in, UCI out. `bot/homemade.py` is the class lichess-bot loads (`engine.name: ChessEngine`).
 

@@ -61,9 +61,9 @@ Promotions emit four moves (Q, R, B, N), including capturing promotions.
 
 ## Evaluation
 
-White-centric tapered centipawns. Material and piece-square tables from the [simplified evaluation function](https://www.chessprogramming.org/Simplified_Evaluation_Function) are kept incrementally in `put` / `remove` (separate MG/EG pawn tables; other pieces reuse the MG PST in the endgame; kings already have MG/EG tables). Game phase is remaining non-pawn material (Q=4, R=2, B=N=1, max 24). The returned score interpolates `(phase * mg + (24 - phase) * eg) / 24`.
+White-centric tapered centipawns. **Classical HCE only — no NNUE.** Material and piece-square tables are kept incrementally in `put` / `remove` (MG from the [simplified evaluation function](https://www.chessprogramming.org/Simplified_Evaluation_Function); PeSTO-style EG tables for every piece, plus separate king EG). Game phase is remaining non-pawn material (Q=4, R=2, B=N=1, max 24). The returned score interpolates `(phase * mg + (24 - phase) * eg) / 24`. Startpos is 0 by symmetry.
 
-Each `evaluate_white()` call also adds cheap bitboard terms: pawn structure (isolated, doubled, passed-by-rank, phalanx), bishop pair, rooks on open/semi-open files, knight/bishop/rook mobility, and a middlegame king pawn-shield. `evaluate()` returns that score from the side to move (so negamax can negate).
+Each `evaluate_white()` call also adds cheap bitboard terms at the leaf: pawn structure (isolated, doubled, passed-by-rank, phalanx), bishop pair, rooks on open/semi-open files and on the 7th, knight outposts, pawn threats against hanging minors/majors, knight/bishop/rook mobility, and a middlegame king pawn-shield. `evaluate()` returns that score from the side to move (so negamax can negate).
 
 ## Search
 
@@ -72,7 +72,7 @@ Root search is **iterative deepening**: it completes depth 1, then 2, … up to 
 Each iteration tries every legal move with PVS, then calls:
 
 - **Minimax** — full tree, no pruning (debug / CLI)
-- **Alpha-beta** — fail-soft negamax with a clustered transposition table, hash-move / SEE / MVV-LVA / killer / history ordering, null-move pruning, log-style LMR, reverse futility, quiet futility, and an improving flag from the static-eval ply stack
+- **Alpha-beta** — fail-soft negamax with a clustered transposition table, hash-move / SEE / MVV-LVA / killer / history / countermove ordering, null-move pruning, log-style LMR, reverse futility, quiet futility, an improving flag from the static-eval ply stack, check extensions (`depth+1` in check, capped at two per path / ply 16), and internal iterative reductions on a TT miss at depth ≥ 5
 - **Alpha-beta + quiescence** — at depth 0, stand pat and search captures (all moves if in check), capped at ply 18. Losing SEE captures are skipped unless they are promotions or checks.
 
 Interior nodes generate **captures first** (winning/equal SEE ahead of losing), then quiets only if there is no cutoff. The next move is selected by swap-next on precomputed scores rather than sorting the whole list. Moves are tried with make/unmake; those that leave the king in check are skipped.
@@ -81,9 +81,11 @@ Interior nodes generate **captures first** (winning/equal SEE ahead of losing), 
 
 `max_seconds` is a hard abort (checked every 256 nodes) — the most the clock will allow if the PV is thrashing. `target_seconds` is the soft bound. A stable PV makes that soft deadline (and the ~1.5× remaining-time check) more likely to fire; it never stops the search on its own. Unstable PVs ignore the optimum and spend toward the hard cap. If `target_seconds` is 0 and a hard cap is set, the soft bound is 70% of the hard cap.
 
+Live Lichess and the Stockfish gauntlet both feed a Stockfish-style optimum/maximum from the remaining game clock (see [bot.md](bot.md)). On 60+0 that is ~1.5s opening / ~8s hard, not a 35ms/100ms per-move cap.
+
 Mate is `100000 - ply` so shorter mates score higher. Draw by 50-move or repetition returns 0 inside the tree. The search always unmakes before returning.
 
-The transposition table is process-lifetime (256K buckets × 4 × 16-byte entries, one cache line per bucket). Replacement prefers an empty slot, then older generation / shallower draft. Generation is a nibble in the flag byte and increments at each root search. Killers and history reset at the start of each root search.
+The transposition table is process-lifetime (256K buckets × 4 × 16-byte entries, one cache line per bucket). Replacement prefers an empty slot, then older generation / shallower draft. Generation is a nibble in the flag byte and increments at each root search. Killers reset each root search. History, countermove, and continuation use gravity / aging and persist across moves in a game (the `Searcher` is process-lifetime). Singular extensions are not implemented.
 
 ## Hash
 

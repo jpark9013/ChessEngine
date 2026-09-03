@@ -15,6 +15,7 @@ source = { virtual = "." }
 
 [package.dev-dependencies]
 dev = [
+    { name = "chess" },
     { name = "ruff" },
 ]
 strength = [
@@ -24,7 +25,10 @@ strength = [
 [package.metadata]
 
 [package.metadata.requires-dev]
-dev = [{ name = "ruff", specifier = ">=0.9" }]
+dev = [
+    { name = "chess", specifier = ">=1.11" },
+    { name = "ruff", specifier = ">=0.9" },
+]
 strength = [{ name = "chess", specifier = ">=1.11" }]
 
 [[package]]

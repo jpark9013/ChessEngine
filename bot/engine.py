@@ -1,22 +1,37 @@
 """FEN search contract used by the lichess-bot homemade adapter.
 
-Two-layer bullet clocks. The allocator sets an *optimum* (`target`) and a
-*maximum* (`hard`). Iterative deepening in C++ stops at the optimum when the
-PV is stable, and spends toward the maximum only when the best move or eval
+Two-layer clocks, Stockfish-style. The allocator sets an *optimum* (`target`)
+and a *maximum* (`hard`). Iterative deepening in C++ stops at the optimum when
+the PV is stable, and spends toward the maximum only when the best move or eval
 keeps swinging.
+
+Live Lichess, the Python CLI, and the Stockfish gauntlet / Elo CI job use
+the full remaining game clock (``mode="live"``). ``mode="gauntlet"`` is the
+old 35ms/100ms handicap, kept for local experiments.
 """
 
 from __future__ import annotations
 
+import os
 from typing import NamedTuple
 
 import chessengine as ce
 
 START_FEN = "rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1"
 
-# Optimum / maximum for a healthy 30–60s clock. Unstable positions may use hard.
-_MAX_TARGET = 0.035
-_MAX_HARD = 0.10
+# Matches bot/config.yml move_overhead (network + process lag on Lichess).
+_MOVE_OVERHEAD = 0.35
+_FLAG_BUFFER = 0.08
+_PANIC_CLOCK = 0.40
+_INC_FRAC = 0.65
+_MAX_USABLE_FRAC = 0.75
+_MIN_HORIZON = 20
+_MAX_HORIZON = 40
+
+# Strength-gate / Elo-estimate match fairness. Not used on Lichess.
+GAUNTLET_TARGET = 0.035
+GAUNTLET_HARD = 0.10
+GAUNTLET_DEPTH = 12
 
 
 class TimeBudget(NamedTuple):
@@ -25,20 +40,27 @@ class TimeBudget(NamedTuple):
     max_depth: int
 
 
-def _expected_moves(ply: int) -> int:
-    """Moves we still budget for. Stays conservative so we never dump the clock."""
-    made = max(0, ply // 2)
-    return max(10, 32 - made // 2)
+def _horizon(ply: int) -> int:
+    """Remaining moves we still budget for. Shrinks with ply, 40 → 20."""
+    return max(_MIN_HORIZON, _MAX_HORIZON - max(0, ply) // 4)
+
+
+def _max_scale(ply: int) -> float:
+    """SF-ish 5.5–8× optimum for an unstable PV."""
+    return min(8.0, 5.5 + max(0, ply) / 16.0)
 
 
 def _depth_for_budget(hard: float) -> int:
+    """ID ceiling. Time, not a 100ms-era depth=12 clamp, is the real limit."""
     if hard < 0.04:
         return 4
     if hard < 0.08:
         return 8
-    if hard < 0.12:
-        return 12
-    return 16
+    if hard < 0.15:
+        return 16
+    if hard < 0.40:
+        return 32
+    return 64
 
 
 def _depth_for_clock(clock: float) -> int:
@@ -47,10 +69,46 @@ def _depth_for_clock(clock: float) -> int:
     if clock < 1.0:
         return 3
     if clock < 3.0:
-        return 6
-    if clock < 10.0:
         return 12
-    return 16
+    if clock < 10.0:
+        return 32
+    return 64
+
+
+def _panic_budget(clock: float) -> TimeBudget:
+    """Tiny remaining time: a fixed short think, never dump the clock."""
+    hard = min(0.05, max(0.012, clock * 0.25))
+    hard = min(hard, max(0.008, clock - 0.05))
+    target = min(hard * 0.60, hard)
+    return TimeBudget(max(0.004, target), max(target, hard), 2 if clock <= 0.20 else 4)
+
+
+def _gauntlet_budget(
+    our: float | None,
+    inc: float | None,
+    sudden: float | None,
+    ply: int,
+) -> TimeBudget:
+    """Fixed 35/100ms handicap for local experiments. CI uses mode=live."""
+    del inc, ply
+    if sudden is not None and sudden > 0:
+        hard = min(GAUNTLET_HARD, max(0.03, sudden * 0.85))
+        target = min(GAUNTLET_TARGET, hard * 0.45)
+        return TimeBudget(target, hard, GAUNTLET_DEPTH)
+    clock = float(our if our is not None else 5.0)
+    if clock <= _PANIC_CLOCK:
+        return _panic_budget(clock)
+    return TimeBudget(GAUNTLET_TARGET, GAUNTLET_HARD, GAUNTLET_DEPTH)
+
+
+def _clamp_to_clock(target: float, hard: float, clock: float, usable: float) -> TimeBudget:
+    hard = min(hard, usable * _MAX_USABLE_FRAC, max(0.012, clock - _FLAG_BUFFER))
+    if clock > _MOVE_OVERHEAD:
+        hard = min(hard, usable)
+    target = min(target, hard)
+    target = max(0.008, target)
+    hard = max(hard, target)
+    return TimeBudget(target, hard, _depth_for_budget(hard))
 
 
 def allocate_time(
@@ -58,42 +116,45 @@ def allocate_time(
     inc: float | None,
     sudden: float | None,
     ply: int = 0,
+    *,
+    mode: str | None = None,
 ) -> TimeBudget:
     """Optimum and maximum think time from the UCI clock.
 
     `target` is how long a stable position should take. `hard` is the extra
-    budget search may spend if the PV is unstable. Increment raises both;
-    a 0-increment bullet clock stays stingy.
+    budget search may spend if the PV is unstable. Increment raises both.
+
+    ``mode="live"`` is the Stockfish-style allocator used on Lichess and in
+    the CI gauntlet. ``mode="gauntlet"`` is the old 35ms/100ms handicap. If
+    ``mode`` is omitted, ``GAUNTLET=1`` selects that handicap; otherwise live.
     """
+    if mode is None:
+        mode = "gauntlet" if os.environ.get("GAUNTLET") == "1" else "live"
+    if mode == "gauntlet":
+        return _gauntlet_budget(our, inc, sudden, ply)
+
+    ply = max(0, int(ply))
+
     if sudden is not None and sudden > 0:
-        hard = max(0.03, min(_MAX_HARD, sudden * 0.85))
-        target = max(0.012, min(_MAX_TARGET, hard * 0.45))
-        return TimeBudget(target, hard, _depth_for_budget(hard))
+        hard = max(0.03, sudden * 0.85)
+        target = max(0.012, hard * 0.50)
+        if sudden <= _PANIC_CLOCK:
+            return _panic_budget(sudden)
+        return _clamp_to_clock(target, hard, sudden, max(0.05, sudden - _FLAG_BUFFER))
 
     clock = float(our if our is not None else 5.0)
     increment = float(inc if inc is not None else 0.0)
-    ply = max(0, int(ply))
 
-    if clock <= 0.20:
-        hard = min(0.04, max(0.015, clock * 0.35))
-        return TimeBudget(min(0.012, hard * 0.6), hard, 2)
-    if clock <= 0.60:
-        hard = min(0.06, clock * 0.12)
-        target = min(0.025, hard * 0.50)
-        return TimeBudget(target, max(target, hard), 4)
+    if clock <= _PANIC_CLOCK:
+        return _panic_budget(clock)
 
-    reserve = 0.20
-    usable = max(0.05, clock - reserve)
-    base = usable / _expected_moves(ply) + increment * 0.45
-    hard = min(_MAX_HARD, max(0.04, base * 1.8), usable * 0.06)
-    target = min(_MAX_TARGET, max(0.012, hard * 0.40, base * 0.25))
-    if clock < 8.0:
-        scale = max(0.35, clock / 8.0)
-        target *= scale
-        hard *= scale
-    hard = min(hard, max(0.04, clock - 0.08))
-    target = min(target, hard * 0.75)
-    return TimeBudget(target, hard, _depth_for_budget(hard))
+    usable = max(0.05, clock - _MOVE_OVERHEAD)
+    horizon = _horizon(ply)
+    optimum = usable / horizon
+    if increment > 0:
+        optimum += increment * _INC_FRAC
+    maximum = optimum * _max_scale(ply)
+    return _clamp_to_clock(optimum, maximum, clock, usable)
 
 
 def choose_depth(our: float | None, requested: int | None) -> int:

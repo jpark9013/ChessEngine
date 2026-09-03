@@ -36,7 +36,8 @@ class Searcher {
   static constexpr int kMaxPly = 64;
 
   int minimax(Board& board, int depth, int ply);
-  int alphabeta(Board& board, int depth, int ply, int alpha, int beta, bool pv);
+  int alphabeta(Board& board, int depth, int ply, int alpha, int beta, bool pv, const Move& prev,
+                int ext_used);
   int quiescence(Board& board, int ply, int alpha, int beta);
   int terminal_score(Board& board, int ply);
   bool time_up() const;
@@ -49,6 +50,8 @@ class Searcher {
   int move_score(const Board& board, const Move& m, const Move& hash, int ply) const;
   bool is_capture(const Board& board, const Move& m) const;
   void on_quiet_cutoff(int ply, const Move& m, int depth);
+  void age_history();
+  static void apply_history(int& entry, int bonus);
 
   SearchLimits limits_{};
   std::uint64_t nodes_ = 0;
@@ -59,6 +62,9 @@ class Searcher {
   bool abort_ = false;
   Move killers_[kMaxPly][2]{};
   int history_[64][64]{};
+  Move countermove_[64][64]{};
+  int continuation_[64][64]{};
+  Move ancestors_[kMaxPly]{};
   int eval_stack_[kMaxPly]{};
 };
 

@@ -1,0 +1,1 @@
+"""Lichess homemade adapter package."""

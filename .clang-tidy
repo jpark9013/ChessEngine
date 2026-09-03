@@ -1,0 +1,11 @@
+Checks: >
+  -*,
+  bugprone-*,
+  clang-analyzer-*,
+  performance-unnecessary-copy-initialization,
+  -bugprone-easily-swappable-parameters,
+  -bugprone-narrowing-conversions
+
+HeaderFilterRegex: 'src/.*'
+WarningsAsErrors: ''
+FormatStyle: none

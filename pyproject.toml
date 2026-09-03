@@ -1,0 +1,22 @@
+[project]
+name = "chessengine-bot"
+version = "0.1.0"
+description = "Lichess homemade adapter and Python tests for ChessEngine"
+requires-python = ">=3.11"
+dependencies = []
+
+[dependency-groups]
+dev = ["ruff>=0.9"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["bot", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+
+[tool.ruff.lint.per-file-ignores]
+"bot/homemade.py" = ["INP001"]
+"tests/__init__.py" = ["E402"]
+"tests/test_adapter.py" = ["E402"]

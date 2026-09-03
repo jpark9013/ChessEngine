@@ -1,0 +1,109 @@
+token: "LICHESS_TOKEN_PLACEHOLDER"
+url: "https://lichess.org/"
+
+engine:
+  dir: "./"
+  name: "ChessEngine"
+  debug: false
+  working_dir: ""
+  protocol: "homemade"
+  ponder: false
+  polyglot:
+    enabled: false
+    book:
+      standard: []
+    min_weight: 1
+    selection: "weighted_random"
+    max_depth: 8
+    normalization: "none"
+  draw_or_resign:
+    resign_enabled: false
+    resign_score: -1000
+    resign_for_egtb_minus_two: false
+    resign_moves: 3
+    offer_draw_enabled: true
+    offer_draw_score: 20
+    offer_draw_for_egtb_zero: false
+    offer_draw_moves: 8
+    offer_draw_pieces: 12
+  online_moves:
+    max_out_of_book_moves: 0
+    max_retries: 2
+    chessdb_book:
+      enabled: false
+    lichess_cloud_analysis:
+      enabled: false
+    lichess_opening_explorer:
+      enabled: false
+    online_egtb:
+      enabled: false
+  lichess_bot_tbs:
+    syzygy:
+      enabled: false
+      paths: []
+    gaviota:
+      enabled: false
+      paths: []
+  homemade_options: {}
+  silence_stderr: false
+
+abort_time: 30
+fake_think_time: false
+rate_limiting_delay: 0
+move_overhead: 2000
+max_takebacks_accepted: 0
+quit_after_all_games_finish: false
+
+correspondence:
+  move_time: 20
+  checkin_period: 300
+  disconnect_time: 150
+  ponder: false
+
+challenge:
+  concurrency: 3
+  games_reserved_for_humans: 0
+  sort_by: "best"
+  preference: "none"
+  accept_bot: true
+  only_bot: false
+  max_increment: 20
+  min_increment: 0
+  max_base: 1800
+  min_base: 0
+  max_days: 14
+  min_days: 1
+  variants:
+    - standard
+  time_controls:
+    - bullet
+    - blitz
+    - rapid
+    - classical
+  modes:
+    - casual
+    - rated
+  bullet_requires_increment: false
+  max_simultaneous_games_per_user: 3
+
+greeting:
+  hello: "Hi! I'm {me}."
+  goodbye: "Good game!"
+  hello_spectators: "Hi! I'm {me}."
+  goodbye_spectators: "Thanks for watching!"
+
+matchmaking:
+  allow_matchmaking: false
+  allow_during_games: false
+  challenge_variant: "standard"
+  challenge_timeout: 30
+  challenge_initial_time:
+    - 60
+    - 180
+  challenge_increment:
+    - 1
+  opponent_rating_difference: 300
+  rating_preference: "none"
+  challenge_mode: "random"
+  challenge_filter: none
+  include_challenge_block_list: false

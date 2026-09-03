@@ -1,0 +1,7 @@
+CompileFlags:
+  Add:
+    - "-Isrc"
+    - "-Itests"
+    - "-std=c++20"
+If:
+  PathMatch: [src/.*, tests/.*]

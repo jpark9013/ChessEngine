@@ -1,0 +1,70 @@
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  cpp-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake g++ clang-tidy
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DCHESS_BUILD_TESTS=OFF -DCHESS_BUILD_PYTHON=OFF
+      - name: clang-tidy
+        run: >
+          clang-tidy -p build
+          src/attacks.cpp src/board.cpp src/perft.cpp src/search.cpp src/zobrist.cpp src/main.cpp
+
+  cpp-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake g++
+      - name: Configure and build
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCHESS_BUILD_TESTS=ON -DCHESS_BUILD_PYTHON=OFF
+          cmake --build build -j
+      - name: GoogleTest
+        run: ctest --test-dir build --output-on-failure
+
+  python-lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: ruff
+        run: uv sync --group dev && uv run ruff check bot tests
+
+  python-test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v5
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends cmake g++ python3-dev
+      - name: Build chessengine module
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+            -DCHESS_BUILD_TESTS=OFF -DCHESS_BUILD_PYTHON=ON \
+            -DPython_EXECUTABLE="$(uv python find)"
+          cmake --build build -j
+      - name: unittest
+        run: uv sync --group dev && PYTHONPATH=build:bot uv run python -m unittest discover -s tests -p 'test_*.py' -v
+
+  deploy:
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    needs: [cpp-lint, cpp-test, python-lint, python-test]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+      - name: Deploy Fly worker
+        if: ${{ secrets.FLY_API_TOKEN != '' }}
+        run: flyctl deploy --remote-only
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

@@ -15,6 +15,7 @@ import math
 import multiprocessing
 import os
 import shutil
+import signal
 import sys
 from collections.abc import Iterator
 from concurrent.futures import FIRST_COMPLETED, Future, ProcessPoolExecutor, wait
@@ -311,21 +312,65 @@ def _write_pgn(path: Path, records: list[GameRecord | None]) -> None:
             print(record.pgn, file=fh, end="\n\n")
 
 
+def _kill_engine(engine: object) -> None:
+    """Drop Stockfish immediately. UCI quit can block the process forever."""
+    transport = getattr(engine, "transport", None)
+    pid = None
+    if transport is not None:
+        get_pid = getattr(transport, "get_pid", None)
+        if callable(get_pid):
+            try:
+                pid = int(get_pid())
+            except Exception:
+                pid = None
+        for meth in ("kill", "abort", "close"):
+            fn = getattr(transport, meth, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+                break
+    closer = getattr(engine, "close", None)
+    if callable(closer):
+        try:
+            closer()
+        except Exception:
+            pass
+    if pid:
+        try:
+            os.kill(pid, signal.SIGKILL)
+        except Exception:
+            pass
+
+
+def _stop_pool(pool: ProcessPoolExecutor, pending: set[Future[GameRecord]]) -> None:
+    for fut in pending:
+        fut.cancel()
+    for proc in list(getattr(pool, "_processes", {}).values()):
+        try:
+            if proc.is_alive():
+                proc.kill()
+        except Exception:
+            pass
+    pool.shutdown(wait=False, cancel_futures=True)
+
+
 def _probe_strength(sf_path: Path, elo: int) -> str:
     import chess.engine
 
-    engine = chess.engine.SimpleEngine.popen_uci(str(sf_path))
+    engine = chess.engine.SimpleEngine.popen_uci(str(sf_path), timeout=2.0)
     try:
         return _configure_stockfish(engine, elo)
     finally:
-        engine.quit()
+        _kill_engine(engine)
 
 
 def _init_worker(sf_path: str, elo: int) -> None:
     global _WORKER_ENGINE
     import chess.engine
 
-    _WORKER_ENGINE = chess.engine.SimpleEngine.popen_uci(sf_path)
+    _WORKER_ENGINE = chess.engine.SimpleEngine.popen_uci(sf_path, timeout=2.0)
     _configure_stockfish(_WORKER_ENGINE, elo)
     atexit.register(_shutdown_worker)
 
@@ -335,7 +380,7 @@ def _shutdown_worker() -> None:
     engine = _WORKER_ENGINE
     _WORKER_ENGINE = None
     if engine is not None:
-        engine.quit()  # type: ignore[attr-defined]
+        _kill_engine(engine)
 
 
 def _worker_play(index: int, max_ply: int) -> GameRecord:
@@ -414,7 +459,7 @@ def _iter_serial(
 ) -> Iterator[GameRecord]:
     import chess.engine
 
-    engine = chess.engine.SimpleEngine.popen_uci(sf_path)
+    engine = chess.engine.SimpleEngine.popen_uci(sf_path, timeout=2.0)
     try:
         _configure_stockfish(engine, elo)
         for i in range(games):
@@ -423,7 +468,7 @@ def _iter_serial(
             if record.result in {"crash", "illegal"}:
                 return
     finally:
-        engine.quit()
+        _kill_engine(engine)
 
 
 def _iter_parallel(
@@ -461,10 +506,7 @@ def _iter_parallel(
                 return
             fill()
     finally:
-        for fut in pending:
-            fut.cancel()
-        # Cancel unstarted work. In-flight games may finish; we do not yield them.
-        pool.shutdown(wait=True, cancel_futures=True)
+        _stop_pool(pool, pending)
 
 
 def _write_summary(score: MatchScore, args: argparse.Namespace) -> None:

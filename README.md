@@ -2,6 +2,10 @@
 
 A from-scratch C++ chess library: legal move generation, FEN, SAN/UCI, evaluation, and alpha-beta search. There is a command-line player and a Python module via pybind11.
 
+<!-- elo-estimate:start -->
+Estimated strength: **unmeasured** (±50, vs Stockfish `UCI_Elo`, 8 games at 30+0 / 60+0)
+<!-- elo-estimate:end -->
+
 This is a rewrite of the original single-header engine. The old design packed flags into coordinates, ignored pawn checks, leaked make/unmake on search cutoffs, and did not round-trip FEN. This tree splits those concerns into a small static library and locks the rules with perft.
 
 ## Layout
@@ -105,7 +109,9 @@ See [docs/cpp-api.md](docs/cpp-api.md) and [docs/architecture.md](docs/architect
 
 ## Lichess bot
 
-[docs/bot.md](docs/bot.md) — homemade adapter in `bot/`, always-on Fly worker (`fly.toml`, 2 GB). The live bot only plays bullet with base ≤ 120s (1+0, 2+1, …). CI runs tests on every branch, a Stockfish Elo-2200 gauntlet (4×30s and 4×60s), and deploys from `main` when `FLY_API_TOKEN` is set and the gauntlet scores at least 4 points in 8 games.
+[docs/bot.md](docs/bot.md) — homemade adapter in `bot/`, always-on Fly worker (`fly.toml`, 2 GB). The live bot only plays bullet with base ≤ 120s (1+0, 2+1, …). Outgoing matchmaking is **rated 1+0** against other bots, preferring equal/stronger once our rating is established; declined challenges are cooled down for 7 days (`bot/challenge_cooldown.json`, gitignored). Put `LICHESS_TOKEN` in `.env` (never commit it) and start with `uv run python scripts/run_lichess_bot.py`.
+
+CI runs tests on every branch, a Stockfish Elo-2200 gauntlet (4×30s and 4×60s), and deploys from `main` when `FLY_API_TOKEN` is set and the gauntlet scores at least 4 points in 8 games. After that, `estimate-elo` binary-searches Stockfish `UCI_Elo` (same 8-game 30+0/60+0 protocol) and writes the ±50 estimate into the markers above.
 
 ## What this engine is not
 

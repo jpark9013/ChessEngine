@@ -90,17 +90,16 @@ greeting:
   goodbye_spectators: "Thanks for watching!"
 
 matchmaking:
-  allow_matchmaking: false
+  allow_matchmaking: true
   allow_during_games: false
   challenge_variant: "standard"
-  challenge_timeout: 30
+  challenge_timeout: 1
   challenge_initial_time:
-    - 30
     - 60
   challenge_increment:
     - 0
-  opponent_rating_difference: 300
-  rating_preference: "none"
-  challenge_mode: "random"
-  challenge_filter: none
+  opponent_rating_difference: 200
+  rating_preference: "high"
+  challenge_mode: "rated"
+  challenge_filter: coarse
   include_challenge_block_list: false

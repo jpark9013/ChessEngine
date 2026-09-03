@@ -26,6 +26,9 @@ WORKDIR /app
 COPY --from=build /src/build/chessengine*.so /app/
 COPY bot/engine.py /app/engine.py
 COPY bot/homemade.py /app/homemade.py
+COPY bot/matchmaking.py /app/matchmaking.py
+COPY bot/lichess_hooks.py /app/lichess_hooks.py
+COPY bot/run.py /app/run.py
 COPY bot/config.yml /app/config.yml
 COPY bot/entrypoint.sh /app/entrypoint.sh
 RUN chmod +x /app/entrypoint.sh \
@@ -33,7 +36,10 @@ RUN chmod +x /app/entrypoint.sh \
     && pip install --no-cache-dir -r /app/lichess-bot/requirements.txt \
     && cp /app/homemade.py /app/lichess-bot/homemade.py \
     && cp /app/config.yml /app/lichess-bot/config.yml \
-    && cp /app/engine.py /app/lichess-bot/engine.py
+    && cp /app/engine.py /app/lichess-bot/engine.py \
+    && cp /app/matchmaking.py /app/lichess-bot/matchmaking.py \
+    && cp /app/lichess_hooks.py /app/lichess-bot/lichess_hooks.py \
+    && cp /app/run.py /app/lichess-bot/run.py
 
 ENV PYTHONPATH=/app
 ENV LICHESS_BOT_CONFIG=/app/lichess-bot/config.yml

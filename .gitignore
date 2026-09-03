@@ -1,5 +1,9 @@
 # Project exclude paths
 .env
+.env.local
+.lichess-bot/
+bot/challenge_cooldown.json
+.lichess-cooldowns.json
 /cmake-build-debug/
 /build/
 /build-*/

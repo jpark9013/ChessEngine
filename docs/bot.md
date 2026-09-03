@@ -1,18 +1,35 @@
 # Lichess bot
 
-The worker is [lichess-bot](https://github.com/lichess-bot-devs/lichess-bot) plus our homemade engine. We do not call berserk or the Lichess HTTP API ourselves.
+The worker is [lichess-bot](https://github.com/lichess-bot-devs/lichess-bot) plus our homemade engine. Game play still goes through lichess-bot. Outgoing matchmaking policy (who to challenge, 1+0, reject cooldown) lives in `bot/matchmaking.py` and is installed as a hook (`bot/lichess_hooks.py`) before `lichess-bot` starts.
 
 The bot only accepts **bullet with base ≤ 120s** (1+0, 2+1, 1+1, 30+0, ½+0). Lichess does not allow bots to play ultraBullet. Blitz/rapid/classical are refused. Search uses a two-layer bullet clock: an **optimum** (~35ms) for a stable PV and a **maximum** (~100ms) if the best move keeps changing. Obvious positions stop early; messy ones spend toward the maximum. Concurrency is 1 so one game owns the CPU. `move_overhead` is 350ms.
 
 `bot/engine.py` is the contract: FEN in, UCI out. `bot/homemade.py` is the class lichess-bot loads (`engine.name: ChessEngine`).
 
+## Matchmaking
+
+Outgoing challenges are **rated 1+0 standard** against other Lichess **bots** only. Incoming still follows `bot/config.yml` (bullet, base ≤ 120s, bots and humans).
+
+- **No / provisional bullet rating:** any eligible online bot (has a bullet rating and is not on cooldown).
+- **Established rating** (non-provisional and at least 8 rated bullet games): opponents in `[our_rating - 50, our_rating + 200]`, sampled with a stronger-side skew. We do not challenge bots 200+ points below us.
+- Our bullet rating is re-read from the Lichess profile about every five minutes (lichess-bot's `update_user_profile`).
+- **Reject cooldown:** if a bot declines, times out, or is not open to challenges, we do not challenge them again for **7 days**. `"later"` / busy / opponent rate-limit uses a **2 hour** cooldown instead. Cooldowns persist in `bot/challenge_cooldown.json` (gitignored) so restarts remember.
+
+Lichess limits bots to about **100 games/day** against other bots. Challenges expire in ~20 seconds; the worker waits at least a minute between outgoing challenges. The challenge API can also rate-limit us.
+
+## Token
+
+Put `LICHESS_TOKEN=` in `.env` (see `.env.example`). Never commit `.env`. The runner copies that value to `LICHESS_BOT_TOKEN`, which lichess-bot reads instead of writing the secret into `config.yml`.
+
 ## Local
 
 1. Build the Python module (`./scripts/run_tests.sh` or CMake).
-2. Clone lichess-bot next to this repo (or anywhere).
-3. Copy `bot/homemade.py` and `bot/engine.py` into that clone.
-4. Copy `bot/config.yml`, replace `LICHESS_TOKEN_PLACEHOLDER` with the token from `.env` (never commit it).
-5. `PYTHONPATH=/path/to/ChessEngine/build python lichess-bot.py`
+2. `uv sync --group dev` and put `LICHESS_TOKEN` in `.env`.
+3. `uv run python scripts/run_lichess_bot.py`
+
+That clones [lichess-bot](https://github.com/lichess-bot-devs/lichess-bot) into `.lichess-bot/` (gitignored) if needed, copies the homemade adapter, installs hooks, and starts one worker. A second invocation reuses the existing pid instead of opening another Lichess stream.
+
+You can still run lichess-bot yourself: copy `bot/homemade.py` and `bot/engine.py` into a clone, keep `LICHESS_TOKEN_PLACEHOLDER` in `config.yml`, export `LICHESS_BOT_TOKEN`, and start via `bot/run.py` so the hooks load.
 
 ## Fly.io
 

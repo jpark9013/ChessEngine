@@ -20,6 +20,7 @@ add_library(chess_lib STATIC
     src/board.cpp
     src/perft.cpp
     src/search.cpp
+    src/see.cpp
     src/zobrist.cpp
 )
 target_include_directories(chess_lib PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/src)

@@ -43,6 +43,9 @@ class Searcher {
   bool soft_stop() const;
   bool timed_out();
   void order_moves(Board& board, MoveList& moves, const Move& hash, int ply) const;
+  void score_moves(const Board& board, const MoveList& moves, int* scores, const Move& hash,
+                   int ply) const;
+  static void pick_next(MoveList& moves, int* scores, int idx);
   int move_score(const Board& board, const Move& m, const Move& hash, int ply) const;
   bool is_capture(const Board& board, const Move& m) const;
   void on_quiet_cutoff(int ply, const Move& m, int depth);
@@ -56,6 +59,7 @@ class Searcher {
   bool abort_ = false;
   Move killers_[kMaxPly][2]{};
   int history_[64][64]{};
+  int eval_stack_[kMaxPly]{};
 };
 
 SearchResult search(Board& board, const SearchLimits& limits);

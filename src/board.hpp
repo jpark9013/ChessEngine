@@ -101,10 +101,11 @@ class Board {
   std::uint64_t hash_ = 0;
   Square white_king_{0, 4};
   Square black_king_{7, 4};
-  int eval_noking_ = 0;
+  int eval_mg_ = 0;   // material + non-king middlegame PST
+  int eval_eg_ = 0;   // material + non-king endgame PST
   int king_mg_ = 0;
   int king_eg_ = 0;
-  int queens_ = 0;
+  int phase_ = 0;     // remaining Q=4, R=2, B=N=1 (max 24)
   static constexpr int kMaxUndo = 512;
   Undo undo_[kMaxUndo]{};
   std::uint64_t history_[kMaxUndo]{};

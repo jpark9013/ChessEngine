@@ -1,4 +1,5 @@
 #include "chess.hpp"
+#include "see.hpp"
 
 #include <gtest/gtest.h>
 
@@ -346,6 +347,34 @@ TEST(Board, CapturesThenQuietsMatchAllPseudo) {
   EXPECT_EQ(all.size(), 20);
 }
 
+TEST(Eval, BishopPairBetterThanMaterialOnly) {
+  Board pair = Board::from_fen("k7/8/8/8/8/2B1B3/8/K7 w - - 0 1");
+  Board knights = Board::from_fen("k7/8/8/8/8/2N1N3/8/K7 w - - 0 1");
+  // 2B vs 2N is only +20 material; the pair term should widen the gap.
+  EXPECT_GT(pair.evaluate_white() - knights.evaluate_white(), 20);
+}
+
+TEST(Eval, PassedPawnSeventhBetterThanSecond) {
+  Board seventh = Board::from_fen("4k3/4P3/8/8/8/8/8/4K3 w - - 0 1");
+  Board second = Board::from_fen("4k3/8/8/8/8/8/4P3/4K3 w - - 0 1");
+  EXPECT_GT(seventh.evaluate_white(), second.evaluate_white());
+}
+
+TEST(Eval, KingCenterBetterInEndgameThanMiddlegame) {
+  Board eg_center = Board::from_fen("8/8/4k3/8/4K3/8/4P3/8 w - - 0 1");
+  Board eg_back = Board::from_fen("8/8/4k3/8/8/8/4P3/4K3 w - - 0 1");
+  const int eg_delta = eg_center.evaluate_white() - eg_back.evaluate_white();
+
+  Board mg_center =
+      Board::from_fen("rnbqkbnr/pppppppp/8/8/4K3/8/PPPPPPPP/RNBQ1BNR w kq - 0 1");
+  Board mg_back =
+      Board::from_fen("rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR w KQkq - 0 1");
+  const int mg_delta = mg_center.evaluate_white() - mg_back.evaluate_white();
+
+  EXPECT_GT(eg_delta, 0);
+  EXPECT_GT(eg_delta, mg_delta);
+}
+
 TEST(Search, FindsMateInOne) {
   Board b = Board::from_fen("6k1/5ppp/8/8/8/8/8/R3K3 w - - 0 1");
   auto r = search(b, SearchLimits{1, 0.0, SearchMode::AlphaBeta});
@@ -392,4 +421,18 @@ TEST(Search, TimeBudgetDoesNotOverrunHardLimit) {
   EXPECT_FALSE(r.best_move.is_null());
   EXPECT_GE(r.depth, 1);
   EXPECT_LT(r.seconds, 0.40);
+}
+
+TEST(Search, SeeWinningKnightTakesQueen) {
+  Board b = Board::from_fen("4k3/8/3q4/4p3/4N3/8/8/4K3 w - - 0 1");
+  Move m = b.parse_uci("e4d6");
+  EXPECT_EQ(m.uci(), "e4d6");
+  EXPECT_GE(see(b, m), 500);
+}
+
+TEST(Search, SeeLosingQueenTakesProtectedPawn) {
+  Board b = Board::from_fen("4k3/3p4/4Q3/8/8/8/8/4K3 w - - 0 1");
+  Move m = b.parse_uci("e6d7");
+  EXPECT_EQ(m.uci(), "e6d7");
+  EXPECT_LE(see(b, m), -500);
 }

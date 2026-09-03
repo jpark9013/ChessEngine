@@ -24,8 +24,11 @@ int castle_mask_lost_on_square(Square sq) {
 }
 
 constexpr int kPieceValue[] = {0, 100, 320, 330, 500, 900, 0};
+constexpr int kPhaseValue[] = {0, 0, 1, 1, 2, 4, 0};  // N=1, B=1, R=2, Q=4
+constexpr int kMaxPhase = 24;
 
-// Piece-square tables stored a1..h8, white's perspective.
+// Piece-square tables stored a1..h8, white's perspective. Used as MG;
+// pawns use kPstEgPawn in the endgame, other pieces keep this table.
 constexpr int kPst[7][64] = {
     {0},
     {0,  0,  0,  0,  0,  0,  0,  0,
@@ -89,32 +92,157 @@ constexpr int kKingEndgame[64] = {
     -50,-40,-30,-20,-20,-30,-40,-50
 };
 
+// Rank-oriented pawn EG: no opening d2/e2 penalty, more for advancing.
+constexpr int kPstEgPawn[64] = {
+     0,  0,  0,  0,  0,  0,  0,  0,
+     8,  8,  8,  8,  8,  8,  8,  8,
+    10, 10, 12, 16, 16, 12, 10, 10,
+    14, 14, 18, 24, 24, 18, 14, 14,
+    20, 20, 24, 30, 30, 24, 20, 20,
+    32, 32, 36, 40, 40, 36, 32, 32,
+    50, 50, 50, 50, 50, 50, 50, 50,
+     0,  0,  0,  0,  0,  0,  0,  0};
+
+constexpr int kPassedMg[8] = {0, 5, 10, 18, 28, 42, 70, 0};
+constexpr int kPassedEg[8] = {0, 10, 20, 35, 55, 85, 130, 0};
+constexpr int kIsolatedMg = 12;
+constexpr int kIsolatedEg = 16;
+constexpr int kDoubledMg = 10;
+constexpr int kDoubledEg = 16;
+constexpr int kPhalanx = 4;
+constexpr int kBishopPair = 30;
+constexpr int kRookOpen = 12;
+constexpr int kRookSemi = 6;
+constexpr int kMobility = 2;
+constexpr int kShieldClose = 8;
+constexpr int kShieldFar = 3;
+
+struct MgEg {
+  int mg = 0;
+  int eg = 0;
+};
+
 int pst_index(Color c, Square sq) {
   return c == Color::White ? sq.index() : (sq.index() ^ 56);
 }
 
-int eval_delta(Piece p, Square sq) {
+int signed_val(Color c, int val) { return c == Color::White ? val : -val; }
+
+int eval_delta_mg(Piece p, Square sq) {
   if (p == Piece::None) return 0;
   const Color c = color_of(p);
   const PieceType t = type_of(p);
+  if (t == PieceType::King) return 0;
   const int idx = pst_index(c, sq);
-  int val = kPieceValue[static_cast<int>(t)];
-  if (t != PieceType::King) val += kPst[static_cast<int>(t)][idx];
-  return c == Color::White ? val : -val;
+  const int val = kPieceValue[static_cast<int>(t)] + kPst[static_cast<int>(t)][idx];
+  return signed_val(c, val);
+}
+
+int eval_delta_eg(Piece p, Square sq) {
+  if (p == Piece::None) return 0;
+  const Color c = color_of(p);
+  const PieceType t = type_of(p);
+  if (t == PieceType::King) return 0;
+  const int idx = pst_index(c, sq);
+  const int pst = (t == PieceType::Pawn) ? kPstEgPawn[idx] : kPst[static_cast<int>(t)][idx];
+  return signed_val(c, kPieceValue[static_cast<int>(t)] + pst);
 }
 
 int king_mg_delta(Piece p, Square sq) {
   if (type_of(p) != PieceType::King) return 0;
   const int idx = pst_index(color_of(p), sq);
-  const int val = kPst[6][idx];
-  return color_of(p) == Color::White ? val : -val;
+  return signed_val(color_of(p), kPst[6][idx]);
 }
 
 int king_eg_delta(Piece p, Square sq) {
   if (type_of(p) != PieceType::King) return 0;
   const int idx = pst_index(color_of(p), sq);
-  const int val = kKingEndgame[idx];
-  return color_of(p) == Color::White ? val : -val;
+  return signed_val(color_of(p), kKingEndgame[idx]);
+}
+
+int phase_of(Piece p) {
+  return p == Piece::None ? 0 : kPhaseValue[static_cast<int>(type_of(p))];
+}
+
+Bitboard passed_front(Color c, int sq) {
+  const int f = sq & 7;
+  const int r = sq >> 3;
+  Bitboard files = kFileA << f;
+  if (f > 0) files |= kFileA << (f - 1);
+  if (f < 7) files |= kFileA << (f + 1);
+  if (c == Color::White) {
+    return r >= 7 ? 0 : files & (~0ULL << ((r + 1) * 8));
+  }
+  return r == 0 ? 0 : files & ((1ULL << (r * 8)) - 1);
+}
+
+MgEg pawn_terms(Bitboard ours, Bitboard theirs, Color us) {
+  MgEg s;
+  for (int f = 0; f < 8; ++f) {
+    const int n = popcount(ours & (kFileA << f));
+    if (n > 1) {
+      s.mg -= kDoubledMg * (n - 1);
+      s.eg -= kDoubledEg * (n - 1);
+    }
+  }
+  Bitboard b = ours;
+  while (b) {
+    const int sq = pop_lsb(b);
+    const int f = sq & 7;
+    const int r = sq >> 3;
+    const int rel = (us == Color::White) ? r : 7 - r;
+    Bitboard adj = 0;
+    if (f > 0) adj |= kFileA << (f - 1);
+    if (f < 7) adj |= kFileA << (f + 1);
+    if ((ours & adj) == 0) {
+      s.mg -= kIsolatedMg;
+      s.eg -= kIsolatedEg;
+    }
+    if ((theirs & passed_front(us, sq)) == 0) {
+      s.mg += kPassedMg[rel];
+      s.eg += kPassedEg[rel];
+    }
+  }
+  const int phalanx = popcount(ours & shift_e(ours));
+  s.mg += kPhalanx * phalanx;
+  s.eg += kPhalanx * phalanx;
+  return s;
+}
+
+int rook_file_score(Bitboard rooks, Bitboard our_pawns, Bitboard their_pawns) {
+  int s = 0;
+  while (rooks) {
+    const Bitboard file = kFileA << (pop_lsb(rooks) & 7);
+    if (our_pawns & file) continue;
+    s += (their_pawns & file) ? kRookSemi : kRookOpen;
+  }
+  return s;
+}
+
+int mobility_side(Bitboard knights, Bitboard bishops, Bitboard rooks, Bitboard own,
+                  Bitboard occ) {
+  int m = 0;
+  while (knights) m += popcount(attacks::knight(pop_lsb(knights)) & ~own);
+  while (bishops) m += popcount(attacks::bishop(pop_lsb(bishops), occ) & ~own);
+  while (rooks) m += popcount(attacks::rook(pop_lsb(rooks), occ) & ~own);
+  return m;
+}
+
+int king_pawn_shield(Square k, Bitboard pawns, Color c) {
+  if (!k.valid()) return 0;
+  const int kf = k.file();
+  const int kr = k.rank();
+  const int dir = (c == Color::White) ? 1 : -1;
+  int s = 0;
+  for (int df = -1; df <= 1; ++df) {
+    const int f = kf + df;
+    if (f < 0 || f > 7) continue;
+    const int r1 = kr + dir;
+    const int r2 = kr + 2 * dir;
+    if (on_board(r1, f) && (pawns & bit(r1 * 8 + f))) s += kShieldClose;
+    else if (on_board(r2, f) && (pawns & bit(r2 * 8 + f))) s += kShieldFar;
+  }
+  return s;
 }
 
 }  // namespace
@@ -137,10 +265,11 @@ void Board::clear() {
   hash_ = 0;
   white_king_ = Square();
   black_king_ = Square();
-  eval_noking_ = 0;
+  eval_mg_ = 0;
+  eval_eg_ = 0;
   king_mg_ = 0;
   king_eg_ = 0;
-  queens_ = 0;
+  phase_ = 0;
   undo_count_ = 0;
   hist_count_ = 0;
 }
@@ -153,12 +282,13 @@ void Board::put(Square sq, Piece p) {
     pieces_[piece_index(old)] &= ~b;
     occupancy_[static_cast<int>(color_of(old))] &= ~b;
     hash_ ^= zobrist::piece(old, sq);
-    if (type_of(old) == PieceType::Queen) --queens_;
+    phase_ -= phase_of(old);
     if (type_of(old) == PieceType::King) {
       king_mg_ -= king_mg_delta(old, sq);
       king_eg_ -= king_eg_delta(old, sq);
     } else {
-      eval_noking_ -= eval_delta(old, sq);
+      eval_mg_ -= eval_delta_mg(old, sq);
+      eval_eg_ -= eval_delta_eg(old, sq);
     }
   }
   squares_[i] = p;
@@ -169,12 +299,13 @@ void Board::put(Square sq, Piece p) {
   hash_ ^= zobrist::piece(p, sq);
   if (p == Piece::WKing) white_king_ = sq;
   if (p == Piece::BKing) black_king_ = sq;
-  if (type_of(p) == PieceType::Queen) ++queens_;
+  phase_ += phase_of(p);
   if (type_of(p) == PieceType::King) {
     king_mg_ += king_mg_delta(p, sq);
     king_eg_ += king_eg_delta(p, sq);
   } else {
-    eval_noking_ += eval_delta(p, sq);
+    eval_mg_ += eval_delta_mg(p, sq);
+    eval_eg_ += eval_delta_eg(p, sq);
   }
 }
 
@@ -629,7 +760,42 @@ GameStatus Board::status() {
 }
 
 int Board::evaluate_white() const {
-  return eval_noking_ + (queens_ == 0 ? king_eg_ : king_mg_);
+  int mg = eval_mg_ + king_mg_;
+  int eg = eval_eg_ + king_eg_;
+
+  const Bitboard wp = piece_bb(Color::White, PieceType::Pawn);
+  const Bitboard bp = piece_bb(Color::Black, PieceType::Pawn);
+  const MgEg white_pawns = pawn_terms(wp, bp, Color::White);
+  const MgEg black_pawns = pawn_terms(bp, wp, Color::Black);
+  mg += white_pawns.mg - black_pawns.mg;
+  eg += white_pawns.eg - black_pawns.eg;
+
+  const Bitboard wb = piece_bb(Color::White, PieceType::Bishop);
+  const Bitboard bb = piece_bb(Color::Black, PieceType::Bishop);
+  const int pair = (popcount(wb) >= 2 ? kBishopPair : 0) -
+                   (popcount(bb) >= 2 ? kBishopPair : 0);
+  mg += pair;
+  eg += pair;
+
+  const int rooks = rook_file_score(piece_bb(Color::White, PieceType::Rook), wp, bp) -
+                    rook_file_score(piece_bb(Color::Black, PieceType::Rook), bp, wp);
+  mg += rooks;
+  eg += rooks;
+
+  const Bitboard occ = occupancy();
+  const int mob =
+      kMobility * (mobility_side(piece_bb(Color::White, PieceType::Knight), wb,
+                                 piece_bb(Color::White, PieceType::Rook), occupancy_[0], occ) -
+                   mobility_side(piece_bb(Color::Black, PieceType::Knight), bb,
+                                 piece_bb(Color::Black, PieceType::Rook), occupancy_[1], occ));
+  mg += mob;
+  eg += mob;
+
+  mg += king_pawn_shield(white_king_, wp, Color::White) -
+        king_pawn_shield(black_king_, bp, Color::Black);
+
+  const int phase = std::min(phase_, kMaxPhase);
+  return (phase * mg + (kMaxPhase - phase) * eg) / kMaxPhase;
 }
 
 int Board::evaluate() const {

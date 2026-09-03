@@ -11,7 +11,8 @@ The library is a hybrid bitboard engine: 12 piece bitboards plus occupancy for g
 | `src/attacks.cpp` | Pawn/knight/king tables; occupancy-masked slider rays |
 | `src/zobrist.cpp` | Deterministic 64-bit keys for pieces, side, castling, en passant file |
 | `src/board.cpp` | Position, FEN, attacks, move gen, make/unmake, SAN/UCI, eval, game status |
-| `src/search.cpp` | Iterative deepening, TT, null-move, LMR, PVS, killers/history |
+| `src/search.cpp` | Iterative deepening, clustered TT, aspiration, SEE ordering, LMR, PVS |
+| `src/see.cpp` | Static exchange evaluation (LVA recaptures, x-ray sliders) |
 | `src/perft.cpp` | Recursive legal-move node counts |
 | `src/python_module.cpp` | pybind11 module `chessengine` |
 
@@ -60,25 +61,29 @@ Promotions emit four moves (Q, R, B, N), including capturing promotions.
 
 ## Evaluation
 
-White-centric centipawns: material + piece-square tables from the [simplified evaluation function](https://www.chessprogramming.org/Simplified_Evaluation_Function). King tables switch to the endgame table when there are no queens. `put` / `remove` keep this score incrementally so search does not walk the board at every leaf. `evaluate()` returns that score from the side to move (so negamax can negate).
+White-centric tapered centipawns. Material and piece-square tables from the [simplified evaluation function](https://www.chessprogramming.org/Simplified_Evaluation_Function) are kept incrementally in `put` / `remove` (separate MG/EG pawn tables; other pieces reuse the MG PST in the endgame; kings already have MG/EG tables). Game phase is remaining non-pawn material (Q=4, R=2, B=N=1, max 24). The returned score interpolates `(phase * mg + (24 - phase) * eg) / 24`.
+
+Each `evaluate_white()` call also adds cheap bitboard terms: pawn structure (isolated, doubled, passed-by-rank, phalanx), bishop pair, rooks on open/semi-open files, knight/bishop/rook mobility, and a middlegame king pawn-shield. `evaluate()` returns that score from the side to move (so negamax can negate).
 
 ## Search
 
-Root search is **iterative deepening**: it completes depth 1, then 2, … up to `limits.depth`. The last fully finished iteration is the result. A single legal move is returned without searching.
+Root search is **iterative deepening**: it completes depth 1, then 2, … up to `limits.depth`. The last fully finished iteration is the result. A single legal move is returned without searching. After depth 1, each iteration uses an **aspiration window** around the previous score (±25 cp, doubled on fail-high/low). A research aborted on time keeps the last completed iteration’s best move.
 
 Each iteration tries every legal move with PVS, then calls:
 
 - **Minimax** — full tree, no pruning (debug / CLI)
-- **Alpha-beta** — fail-soft negamax with a transposition table, hash-move / MVV-LVA / killer / history ordering, null-move pruning, LMR, reverse futility, and quiet futility
-- **Alpha-beta + quiescence** — at depth 0, stand pat and search captures (all moves if in check), capped at ply 18
+- **Alpha-beta** — fail-soft negamax with a clustered transposition table, hash-move / SEE / MVV-LVA / killer / history ordering, null-move pruning, log-style LMR, reverse futility, quiet futility, and an improving flag from the static-eval ply stack
+- **Alpha-beta + quiescence** — at depth 0, stand pat and search captures (all moves if in check), capped at ply 18. Losing SEE captures are skipped unless they are promotions or checks.
 
-Interior nodes generate **captures first**, then quiets only if there is no cutoff. Moves are tried with make/unmake; those that leave the king in check are skipped.
+Interior nodes generate **captures first** (winning/equal SEE ahead of losing), then quiets only if there is no cutoff. The next move is selected by swap-next on precomputed scores rather than sorting the whole list. Moves are tried with make/unmake; those that leave the king in check are skipped.
 
-`max_seconds` is a hard abort (checked every 256 nodes) — the most the clock will allow if the PV is thrashing. `target_seconds` is the optimum: stop starting new iterations once the best move and eval have been stable, or if the last iteration would not fit (~1.5×). Unstable PVs ignore the optimum and spend toward the hard cap. If `target_seconds` is 0 and a hard cap is set, the soft bound is 70% of the hard cap.
+`see()` (`src/see.cpp`) is static exchange evaluation: net centipawns for the side that captures first, using LVA recaptures and x-ray sliders. Piece values are 100/320/330/500/900.
+
+`max_seconds` is a hard abort (checked every 256 nodes) — the most the clock will allow if the PV is thrashing. `target_seconds` is the soft bound. A stable PV makes that soft deadline (and the ~1.5× remaining-time check) more likely to fire; it never stops the search on its own. Unstable PVs ignore the optimum and spend toward the hard cap. If `target_seconds` is 0 and a hard cap is set, the soft bound is 70% of the hard cap.
 
 Mate is `100000 - ply` so shorter mates score higher. Draw by 50-move or repetition returns 0 inside the tree. The search always unmakes before returning.
 
-The transposition table is process-lifetime (~1M × 16-byte entries, four per cache line). Killers and history reset at the start of each root search.
+The transposition table is process-lifetime (256K buckets × 4 × 16-byte entries, one cache line per bucket). Replacement prefers an empty slot, then older generation / shallower draft. Generation is a nibble in the flag byte and increments at each root search. Killers and history reset at the start of each root search.
 
 ## Hash
 

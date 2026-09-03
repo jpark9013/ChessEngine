@@ -82,7 +82,7 @@ result = board.search(
 print(result.best_move, result.score, result.nodes, result.seconds)
 ```
 
-Search uses iterative deepening up to `depth`. `max_seconds` aborts the tree; `target_seconds` stops starting new iterations (default: 70% of `max_seconds` when that is set).
+Search uses iterative deepening up to `depth`. `max_seconds` is a hard abort. `target_seconds` is the soft bound (default: 70% of `max_seconds` when that is set); a stable PV makes that deadline more likely to fire, but never stops the search on its own.
 
 `SearchMode.MINIMAX`, `ALPHABETA`, and `ALPHABETA_QUIESCENCE` match the C++ enum.
 

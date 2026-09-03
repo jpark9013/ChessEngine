@@ -39,7 +39,7 @@ PYTHONPATH=build:bot uv run python -m unittest discover -s tests -p 'test_*.py' 
 
 ## Strength floor (Stockfish gauntlet)
 
-CI job `strength` plays our engine against **Stockfish 17.1** with `UCI_LimitStrength` and `UCI_Elo=2200`. Four games are **30+0** and four are **60+0**, two at a time. Our side uses the same two-layer clock as the live bot (optimum ~35ms, maximum ~100ms if the PV is unstable). Deploy requires **≥ 4 points** over 8 games (win = 1, draw = 0.5, loss = 0). Any crash or illegal move fails the job immediately.
+CI job `strength` plays our engine against **Stockfish 17.1** with `UCI_LimitStrength` and `UCI_Elo=2200`. Four games are **30+0** and four are **60+0** (those numbers are the **whole-game** clock per side, not think time per move). Each ply uses the same two-layer allocator as the live bot (optimum ~35ms, maximum ~100ms if the PV is unstable), including Stockfish. Two games run at a time. Deploy requires **≥ 4 points** over 8 games (win = 1, draw = 0.5, loss = 0). Any crash or illegal move fails the job immediately.
 
 ```bash
 uv sync --group strength

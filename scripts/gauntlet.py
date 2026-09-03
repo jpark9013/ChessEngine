@@ -161,11 +161,18 @@ def _play_game(
     clock_s: float,
     max_ply: int,
 ) -> tuple[str, object]:
-    """Return (result_from_our_side, board). result is 1-0, 0-1, 1/2-1/2, illegal, crash."""
+    """Play one 30+0 or 60+0 game. `clock_s` is the whole-game budget per side.
+
+    Each ply gets a short think from `allocate_time` (tens of ms). Do not send
+    the remaining 30s/60s to Stockfish as wtime/btime — it would then spend
+    seconds on a single move.
+    """
     import time
 
     import chess
     import chess.engine
+
+    from engine import allocate_time
 
     board = chess.Board()
     for uci in opening:
@@ -178,6 +185,7 @@ def _play_game(
         mover_white = board.turn == chess.WHITE
         ours = mover_white == we_are_white
         side_clock = white_clock if mover_white else black_clock
+        budget = allocate_time(side_clock, 0.0, None, ply=board.ply())
         started = time.perf_counter()
         if ours:
             try:
@@ -191,12 +199,7 @@ def _play_game(
         else:
             played = stockfish.play(  # type: ignore[attr-defined]
                 board,
-                chess.engine.Limit(
-                    white_clock=white_clock,
-                    black_clock=black_clock,
-                    white_inc=0.0,
-                    black_inc=0.0,
-                ),
+                chess.engine.Limit(time=max(0.01, budget.hard)),
             )
             if played.move is None:
                 return "crash", board
@@ -334,7 +337,8 @@ def run_gauntlet(args: argparse.Namespace) -> MatchScore:
     n_long = args.games // 2
     print(
         f"Games: {args.games}  concurrency: {concurrency}  "
-        f"clocks: {CLOCK_SHORT_S:.0f}s x{n_short}, {CLOCK_LONG_S:.0f}s x{n_long}  "
+        f"game clocks: {CLOCK_SHORT_S:.0f}s+0 x{n_short}, "
+        f"{CLOCK_LONG_S:.0f}s+0 x{n_long}  "
         f"min points: {args.min_points:g}"
     )
 
@@ -412,7 +416,8 @@ def _write_summary(score: MatchScore, args: argparse.Namespace) -> None:
         f"score {score.points:.1f}/{score.games} ({score.fraction:.1%})",
         f"estimated Elo difference: {diff_s}",
         f"crashes: {score.crashes}  illegal: {score.illegal}",
-        f"opponent Elo setting: {args.elo}  clocks: {CLOCK_SHORT_S:.0f}s/{CLOCK_LONG_S:.0f}s",
+        f"opponent Elo setting: {args.elo}  "
+        f"game clocks: {CLOCK_SHORT_S:.0f}s+0 / {CLOCK_LONG_S:.0f}s+0",
     ]
     text = "\n".join(lines)
     print(text)
